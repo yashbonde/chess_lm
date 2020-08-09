@@ -58,7 +58,7 @@ class DataLoader(object):
         self.buffer_size = buffer_size
 
         # self.parse_and_store(maxlen)
-        self.set_train_mode(True)
+        # self.set_train_mode(True)
 
     def _update_m2id(self, key, value):
         if key not in self.m2id:
@@ -150,17 +150,17 @@ class DataLoader(object):
     #     self.train_attention_masks = np.asarray(attentions[split_idx:])
     #     self.train_dataset = np.asarray(data[split_idx:])
 
-    def set_train_mode(self, verbose = False):
-        if verbose:
-            print("💡 Using TRAIN dataset")
-        self.data = self.train_dataset
-        self.attention_mask = self.train_attention_masks
+    # def set_train_mode(self, verbose = False):
+    #     if verbose:
+    #         print("💡 Using TRAIN dataset")
+    #     self.data = self.train_dataset
+    #     self.attention_mask = self.train_attention_masks
 
-    def set_val_mode(self, verbose = False):
-        if verbose:
-            print("💡 Using VALIDATION dataset")
-        self.data = self.val_dataset
-        self.attention_mask = self.val_attention_masks
+    # def set_val_mode(self, verbose = False):
+    #     if verbose:
+    #         print("💡 Using VALIDATION dataset")
+    #     self.data = self.val_dataset
+    #     self.attention_mask = self.val_attention_masks
 
     def __len__(self):
         self.total_lines = None
