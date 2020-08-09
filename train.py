@@ -31,7 +31,7 @@ from transformers import GPT2Config, GPT2LMHeadModel
 CUDA = bool(torch.cuda.device_count())
 
 class DataLoader(object):
-    def __init__(self, lm_fpath, res_fpath, move_to_id_fpath, maxlen, batch_size=32, train_val_split=0.1, upto=-1):
+    def __init__(self, lm_fpath, res_fpath, move_to_id_fpath, maxlen, buffer_size = 1e4, batch_size=4028, train_val_split=0.1, upto=-1):
         """
         Main dataloader iterator object
 
@@ -52,19 +52,10 @@ class DataLoader(object):
 
         # the dataset file is too big to load in one go so need to make a iterative reader/parser
         self.lm_path = lm_fpath
-        self.res_fpath = res_fpath
-
-
-        self.train_dataset = None
-        self.train_attention_masks = None
-        self.val_dataset = None
-        self.val_attention_masks = None
-        self.data = None
-        self.attention_mask = None
-        
-        
+        self.res_fpath = res_fpath        
         self.batch_size = batch_size
         self.maxlen = maxlen
+        self.buffer_size = buffer_size
 
         # self.parse_and_store(maxlen)
         self.set_train_mode(True)
@@ -193,7 +184,11 @@ class DataLoader(object):
                 padded_lm.extend(_lm)
                 attentions.extend(_attention_mask)
 
-                if len(padded_lm) > self.batch_size:
+                if len(padded_lm) > self.buffer_size:
+                    idx = np.arange(len(padded_lm))
+                    np.random.shuffle(idx)
+                    padded_lm = np.asarray(padded_lm)[idx]
+                    attentions = np.asarray(attentions)[idx]
                     if CUDA:
                         out = {
                             "input_ids": torch.from_numpy(np.asarray(padded_lm[:self.batch_size])).long().cuda(),
@@ -343,7 +338,7 @@ if __name__ == "__main__":
             model.train()
             pbar = trange(len(dataset))
             for bidx, b in zip(pbar, dataset):
-                if bidx:
+                if not isinstance(loss, int):
                     loss = loss.item()
                 pbar.set_description(
                     f"Epoch: {e}, TRAIN, batch: {bidx}, loss: {round(loss, 3)}")
@@ -383,4 +378,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt as e:
         print(f"📀 Saving Model.... at: {model_path}")
         torch.save(model.state_dict(), model_path)
-    summary_writer.close()
+    if args.tensorboard:
+        summary_writer.close()
