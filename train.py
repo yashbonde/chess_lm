@@ -47,8 +47,8 @@ class DataLoader(object):
             self.m2id = json.load(m)
         print(f"⏳ Loading complete took {time.time() - st}s")
 
-        self._update_m2id("[result]", max(self.m2id.values()) + 1)
-        self._update_m2id("[pad]", max(self.m2id.values()) + 1)
+        # self._update_m2id("[result]", max(self.m2id.values()) + 1)
+        # self._update_m2id("[pad]", max(self.m2id.values()) + 1)
 
         # the dataset file is too big to load in one go so need to make a iterative reader/parser
         self.lm_path = lm_fpath
@@ -334,7 +334,7 @@ if __name__ == "__main__":
 
     try:
         for e in range(args.num_epochs):
-            dataset.set_train_mode(False)
+            # dataset.set_train_mode(False) # dep
             model.train()
             pbar = trange(len(dataset))
             for bidx, b in zip(pbar, dataset):
