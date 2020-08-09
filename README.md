@@ -21,6 +21,18 @@ There are few improvements to be done if you are interested:
 1. Introduce `multiprocessing` in the `download.py` to speed up the process, it was not needed in my case since I ran the code overnight on my laptop.
 2. Speed up downloads by using `FTP` scripts instead of `HTTP` used by `requests` package.
 
+
+On colab use this command:
+```
+python3 chess_lm/train.py --tf=t --lm="./agg_mv.txt" \
+    --res="./agg_res.txt" \
+    --m2id="chess_lm/m2id.json" \
+    --config="chess_lm/config.json" \
+    --save_folder="/content/drive/My Drive/Colab Notebooks/ChessData" \
+    --model="cgpt2" \
+    --batch_size=4096
+```
+
 ## What's the metric?
 
 So a natural question is how are the comparisons and testing done. Well there are a few things to compare here:

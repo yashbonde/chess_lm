@@ -28,6 +28,7 @@ import torch
 from torch.utils import tensorboard as tb
 from transformers import GPT2Config, GPT2LMHeadModel
 
+CUDA = bool(torch.cuda.device_count())
 
 class DataLoader(object):
     def __init__(self, lm_fpath, res_fpath, move_to_id_fpath, maxlen, batch_size=32, train_val_split=0.1, upto=-1):
@@ -177,7 +178,8 @@ class DataLoader(object):
             with open(self.lm_path, "r") as f:
                 for _ in f:
                     self.total_lines += 1
-        return self.total_lines
+
+        return (self.total_lines // self.batch_size) + min(self.total_lines % self.batch_size, 1)
 
     def __iter__(self):
         with open(self.lm_path, "r") as lm, open(self.res_fpath, "r") as res:
@@ -192,10 +194,16 @@ class DataLoader(object):
                 attentions.extend(_attention_mask)
 
                 if len(padded_lm) > self.batch_size:
-                    out = {
-                        "input_ids": torch.from_numpy(np.asarray(padded_lm[:self.batch_size])).long(),
-                        "attention_mask": torch.from_numpy(np.asarray(attentions[:self.batch_size])).long()
-                    }
+                    if CUDA:
+                        out = {
+                            "input_ids": torch.from_numpy(np.asarray(padded_lm[:self.batch_size])).long().cuda(),
+                            "attention_mask": torch.from_numpy(np.asarray(attentions[:self.batch_size])).long().cuda()
+                        }
+                    else:
+                        out = {
+                            "input_ids": torch.from_numpy(np.asarray(padded_lm[:self.batch_size])).long(),
+                            "attention_mask": torch.from_numpy(np.asarray(attentions[:self.batch_size])).long()
+                        }
 
                     del padded_lm[:self.batch_size]
                     del attentions[:self.batch_size]
@@ -219,13 +227,20 @@ class DataLoader(object):
 
 def accuracy(b, logits):
     # (upto -1) compared to (from 1)
-    input_ids = b["input_ids"].detach().numpy()
-    pred_ids = torch.argmax(logits, dim=-1).detach().numpy()
+    if CUDA:
+        input_ids = b["input_ids"].detach().cpu().numpy()
+        pred_ids = torch.argmax(logits, dim=-1).detach().cpu().numpy()
+    else:
+        input_ids = b["input_ids"].detach().numpy()
+        pred_ids = torch.argmax(logits, dim=-1).detach().numpy()
     corr = 0
     total = 0
     win_corr = 0
     for i in range(input_ids.shape[0]):
-        ids = np.where(b["attention_mask"][i].detach().numpy() == 1)[0]
+        if CUDA:
+            ids = np.where(b["attention_mask"][i].detach().cpu().numpy() == 1)[0]
+        else:
+            ids = np.where(b["attention_mask"][i].detach().numpy() == 1)[0]
         _actual = input_ids[i][ids]
         _pred = pred_ids[i][ids]
 
@@ -257,8 +272,6 @@ if __name__ == "__main__":
                       help="Number of epochs to train / finetune")
     args.add_argument("--train_val_split", type=float, default=0.01,
                       help="Ratio for validation dataset size to total dataset")
-    args.add_argument("--batch_size", type=int, default=64,
-                      help="Batch Size for training")
     args.add_argument("--save_folder", type=str,
                       default="models", help="Folder to save model to")
     args.add_argument("--model", type=str, default="cgpt",
@@ -286,6 +299,8 @@ if __name__ == "__main__":
         config = GPT2Config(**raw_config)
         print(config)
     model = GPT2LMHeadModel(config)
+    if CUDA:
+        model.cuda()
 
     # load dataset
     dataset = DataLoader(
@@ -293,7 +308,7 @@ if __name__ == "__main__":
         res_fpath=args.res,
         move_to_id_fpath=args.m2id,
         maxlen=config.maxlen,
-        batch_size=args.batch_size,
+        batch_size=config.batch_size,
         train_val_split=args.train_val_split,
         upto=-1
     )
@@ -318,44 +333,54 @@ if __name__ == "__main__":
     optim = getattr(torch.optim, raw_config["optimizer"])(params = model.parameters(), **raw_config["optimizer_params"])
     
     summary_writer = None
+    loss = -1
     if args.tensorboard:
-        summary_writer = tb.SummaryWriter(log_dir = model_folder, comment = "Hello World!", flush_secs = 20)
-    for e in range(args.num_epochs):
-        dataset.set_train_mode(False)
-        model.train()
-        pbar = trange(len(dataset))
-        for bidx, b in zip(pbar, dataset):
-            pbar.set_description(f"Epoch: {e}, TRAIN, batch: {bidx}")
-            model.zero_grad()
-            out = model(**b, labels=b["input_ids"])
-            loss, logits = out[:2]
-            loss.backward()
-            optim.step()
+        summary_writer = tb.SummaryWriter(log_dir=model_folder, comment="Hello World!", flush_secs=20)
 
-            total_acc, winner_acc = accuracy(b, logits)
-            if args.tensorboard:
-                summary_writer.add_scalar("Loss/Train", loss.item(), global_step, walltime = time.time())
-                summary_writer.add_scalar("Accuracy/Train_Total", total_acc * 100, global_step, walltime = time.time())
-                summary_writer.add_scalar("Accuracy/Train_Winner_Prediction", winner_acc * 100, global_step, walltime = time.time())
+    try:
+        for e in range(args.num_epochs):
+            dataset.set_train_mode(False)
+            model.train()
+            pbar = trange(len(dataset))
+            for bidx, b in zip(pbar, dataset):
+                if bidx:
+                    loss = loss.item()
+                pbar.set_description(
+                    f"Epoch: {e}, TRAIN, batch: {bidx}, loss: {round(loss, 3)}")
+                model.zero_grad()
+                out = model(**b, labels=b["input_ids"])
+                loss, logits = out[:2]
+                loss.backward()
+                optim.step()
 
-            if global_step % args.save_every == 0:
-                print(f"Writing Model at: {model_path}")
-                torch.save(model.state_dict(), model_path)
+                total_acc, winner_acc = accuracy(b, logits)
+                if args.tensorboard:
+                    summary_writer.add_scalar( "Loss/Train", loss.item(), global_step, walltime=time.time())
+                    summary_writer.add_scalar( "Accuracy/Train_Total", total_acc * 100, global_step, walltime=time.time())
+                    summary_writer.add_scalar( "Accuracy/Train_Winner_Prediction", winner_acc * 100, global_step, walltime=time.time())
 
-            global_step += 1
+                if global_step % args.save_every == 0:
+                    print(f"📀 Saving Model.... at: {model_path}")
+                    torch.save(model.state_dict(), model_path)
 
-        # dataset.set_val_mode(False)
-        # model.eval()
-        # pbar = trange(len(dataset))
-        # for bidx, b in zip(pbar, dataset):
-        #     pbar.set_description(f"Epoch: {e}, VAL, batch: {bidx}")
-        #     out = model(**b, labels=b["input_ids"])
-        #     loss, logits = out[:2]
+                global_step += 1
 
-        #     total_acc, winner_acc = accuracy(b, logits)
-        #     if args.tensorboard:
-        #         summary_writer.add_scalar("Loss/Val", loss.item(), val_step, walltime= time.time())
-        #         summary_writer.add_scalar("Accuracy/Val_Total", total_acc * 100, val_step, walltime=time.time())
-        #         summary_writer.add_scalar("Accuracy/Val_Winner_Prediction", winner_acc * 100, val_step, walltime=time.time())
+            # dataset.set_val_mode(False)
+            # model.eval()
+            # pbar = trange(len(dataset))
+            # for bidx, b in zip(pbar, dataset):
+            #     pbar.set_description(f"Epoch: {e}, VAL, batch: {bidx}")
+            #     out = model(**b, labels=b["input_ids"])
+            #     loss, logits = out[:2]
 
-        #     val_step += 1
+            #     total_acc, winner_acc = accuracy(b, logits)
+            #     if args.tensorboard:
+            #         summary_writer.add_scalar("Loss/Val", loss.item(), val_step, walltime= time.time())
+            #         summary_writer.add_scalar("Accuracy/Val_Total", total_acc * 100, val_step, walltime=time.time())
+            #         summary_writer.add_scalar("Accuracy/Val_Winner_Prediction", winner_acc * 100, val_step, walltime=time.time())
+
+            #     val_step += 1
+    except KeyboardInterrupt as e:
+        print(f"📀 Saving Model.... at: {model_path}")
+        torch.save(model.state_dict(), model_path)
+    summary_writer.close()
