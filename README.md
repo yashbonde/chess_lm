@@ -1,5 +1,7 @@
 # Chess LM
 
+<!-- **[Colab](https://colab.research.google.com/drive/1mJzDxWEfNcnNPRPQUBFh-fCAaaVKV26Y?usp=sharing)** -->
+
 A transformer fit to chess data to see if it performs better than most of players. To get the data run the scrip `download.py` as follows:
 ```
 # downloads the data from the list of links

@@ -377,7 +377,10 @@ if __name__ == "__main__":
 
             #     val_step += 1
     except KeyboardInterrupt as e:
-        print(f"📀 Saving Model.... at: {model_path}")
-        torch.save(model.state_dict(), model_path)
+        print("Keyboard Interrupt Detected, quiting training")
+
+    print(f"📀 Saving Model.... at: {model_path}")
+    torch.save(model.state_dict(), model_path)
+        
     if args.tensorboard:
         summary_writer.close()
