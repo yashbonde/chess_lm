@@ -22,16 +22,7 @@ There are few improvements to be done if you are interested:
 2. Speed up downloads by using `FTP` scripts instead of `HTTP` used by `requests` package.
 
 
-On colab use this command:
-```
-python3 chess_lm/train.py --tf=t --lm="./agg_mv.txt" \
-    --res="./agg_res.txt" \
-    --m2id="chess_lm/m2id.json" \
-    --config="chess_lm/config.json" \
-    --save_folder="/content/drive/My Drive/Colab Notebooks/ChessData" \
-    --model="cgpt2" \
-    --batch_size=4096
-```
+I am currently training a model on colab that has the configuration given in [`config.json`](config.json). This takes about 13 mins to go through one epoch, I am using train/finetune concept that seemlessly trains or finetunes an existting model (super useful when using colab).
 
 ## What's the metric?
 
@@ -47,6 +38,44 @@ So after all the parsing and all, I compressed the file using a standard compres
 
 Eg. GPT-2 big was ~1.75Bn Parameters trained on 40GB of uncompressed text, even if I assume ~20 GB after standard compression (would have been more than this), the model still learned a lookup table through the compressed data.
 
+**Update 09.08.2020:** The model I am training on Colab has the following configurations (`211040 * 32 bits = 844160 Bytes` or `0.85KB` model which is `<< 360MB`):
+```
+2020-08-09 17:30:30.061572: I tensorflow/stream_executor/platform/default/dso_loader.cc:48] Successfully opened dynamic library libcudart.so.10.1
+GPT2Config {
+  "activation_function": "gelu_new",
+  "attn_pdrop": 0.0,
+  "batch_size": 4512,
+  "bos_token_id": 50256,
+  "embd_pdrop": 0.0,
+  "eos_token_id": 50256,
+  "initializer_range": 0.02,
+  "layer_norm_epsilon": 1e-05,
+  "maxlen": 30,
+  "model_type": "gpt2",
+  "n_ctx": 30,
+  "n_embd": 32,
+  "n_head": 2,
+  "n_layer": 12,
+  "n_positions": 30,
+  "optimizer": "Adam",
+  "optimizer_params": {
+    "betas": [
+      0.9,
+      0.999
+    ],
+    "lr": 0.003
+  },
+  "resid_pdrop": 0.0,
+  "summary_activation": null,
+  "summary_first_dropout": 0.0,
+  "summary_proj_to_labels": true,
+  "summary_type": "cls_index",
+  "summary_use_proj": true,
+  "vocab_size": 1799
+}
+
+Model Size: 211040
+```
 
 ## Credits
 

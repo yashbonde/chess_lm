@@ -310,10 +310,11 @@ if __name__ == "__main__":
 
     # if user is going to finetune an existing model
     if args.tf == "f":
-        assert os.path.exists(
-            model_path), f"Model not found on path: {model_path}"
+        assert os.path.exists(model_path), f"Model not found on path: {model_path}"
         print(f"🔋 Finetuning model at: {model_path}")
         model.load_state_dict(torch.load(model_path))
+    elif args.tf == "t":
+        print(f"🔪 Training a new model")
 
     # for i in range(2):
     #     print("================ Epoch", i)
