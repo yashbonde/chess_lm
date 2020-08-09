@@ -306,7 +306,8 @@ if __name__ == "__main__":
         maxlen=config.maxlen,
         batch_size=config.batch_size,
         train_val_split=args.train_val_split,
-        upto=-1
+        upto=-1,
+        buffer_size = raw_config["buffer_size"]
     )
 
     # if user is going to finetune an existing model
