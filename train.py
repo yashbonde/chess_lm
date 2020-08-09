@@ -184,26 +184,27 @@ class DataLoader(object):
                 padded_lm.extend(_lm)
                 attentions.extend(_attention_mask)
 
-                if len(padded_lm) > self.buffer_size:
-                    idx = np.arange(len(padded_lm))
-                    np.random.shuffle(idx)
-                    padded_lm = np.asarray(padded_lm)[idx].tolist()
-                    attentions = np.asarray(attentions)[idx].tolist()
-                    if CUDA:
-                        out = {
-                            "input_ids": torch.from_numpy(np.asarray(padded_lm[:self.batch_size])).long().cuda(),
-                            "attention_mask": torch.from_numpy(np.asarray(attentions[:self.batch_size])).long().cuda()
-                        }
-                    else:
-                        out = {
-                            "input_ids": torch.from_numpy(np.asarray(padded_lm[:self.batch_size])).long(),
-                            "attention_mask": torch.from_numpy(np.asarray(attentions[:self.batch_size])).long()
-                        }
+                if len(self.padded_lm) > self.buffer_size:
+                    while (len(self.padded_lm) > self.batch_size):
+                        idx = np.arange(len(padded_lm))
+                        np.random.shuffle(idx)
+                        padded_lm = np.asarray(padded_lm)[idx].tolist()
+                        attentions = np.asarray(attentions)[idx].tolist()
+                        if CUDA:
+                            out = {
+                                "input_ids": torch.from_numpy(np.asarray(padded_lm[:self.batch_size])).long().cuda(),
+                                "attention_mask": torch.from_numpy(np.asarray(attentions[:self.batch_size])).long().cuda()
+                            }
+                        else:
+                            out = {
+                                "input_ids": torch.from_numpy(np.asarray(padded_lm[:self.batch_size])).long(),
+                                "attention_mask": torch.from_numpy(np.asarray(attentions[:self.batch_size])).long()
+                            }
 
-                    del padded_lm[:self.batch_size]
-                    del attentions[:self.batch_size]
+                        del padded_lm[:self.batch_size]
+                        del attentions[:self.batch_size]
 
-                    yield out
+                        yield out
 
 
     # def __iter__(self):
