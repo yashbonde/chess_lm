@@ -122,3 +122,8 @@ venv2.bak/
 pgns/
 chess_*.txt
 *.zip
+
+# notebook
+*.ipynb
+models/
+lms/

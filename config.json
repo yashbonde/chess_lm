@@ -1,0 +1,23 @@
+{
+    "maxlen": 60,
+    "n_embd": 128,
+    "n_layer": 12,
+    "n_head": 4,
+    "vocab_size": 1796, 
+    "activation_function": "gelu_new",
+    "resid_pdrop": 0.0,
+    "embd_pdrop": 0.0,
+    "attn_pdrop": 0.0,
+    "layer_norm_epsilon": 0.00001,
+    "initializer_range": 0.02,
+    "summary_type": "cls_index",
+    "summary_use_proj": true,
+    "summary_activation": null,
+    "summary_proj_to_labels": true,
+    "summary_first_dropout": 0.0,
+    "optimizer": "Adam",
+    "optimizer_params": {
+        "lr": 0.0001,
+        "betas": [0.9, 0.999]
+    }
+}
