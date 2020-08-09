@@ -187,8 +187,8 @@ class DataLoader(object):
                 if len(padded_lm) > self.buffer_size:
                     idx = np.arange(len(padded_lm))
                     np.random.shuffle(idx)
-                    padded_lm = np.asarray(padded_lm)[idx]
-                    attentions = np.asarray(attentions)[idx]
+                    padded_lm = np.asarray(padded_lm)[idx].tolist()
+                    attentions = np.asarray(attentions)[idx].tolist()
                     if CUDA:
                         out = {
                             "input_ids": torch.from_numpy(np.asarray(padded_lm[:self.batch_size])).long().cuda(),
