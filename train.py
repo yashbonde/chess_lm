@@ -1,4 +1,5 @@
 # Copyright 2018 The OpenAI Team Authors and HuggingFace Inc. team.
+# Yash Bonde
 # Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +30,8 @@ from torch.utils import tensorboard as tb
 from transformers import GPT2Config, GPT2LMHeadModel
 
 CUDA = bool(torch.cuda.device_count())
+if CUDA:
+    print("🔌 Found CUDA ... Happy Hunting!")
 
 class DataLoader(object):
     def __init__(self, lm_fpath, res_fpath, move_to_id_fpath, maxlen, buffer_size = 1e4, batch_size=4028, train_val_split=0.1, upto=-1):
@@ -184,8 +187,8 @@ class DataLoader(object):
                 padded_lm.extend(_lm)
                 attentions.extend(_attention_mask)
 
-                if len(self.padded_lm) > self.buffer_size:
-                    while (len(self.padded_lm) > self.batch_size):
+                if len(padded_lm) > self.buffer_size:
+                    while (len(padded_lm) > self.batch_size):
                         idx = np.arange(len(padded_lm))
                         np.random.shuffle(idx)
                         padded_lm = np.asarray(padded_lm)[idx].tolist()
@@ -274,7 +277,7 @@ if __name__ == "__main__":
                       help="Saved model to have filepath `<model>.pt`")
     args.add_argument("--save_every", type=int, default=1000,
                       help="Save model every this global steps")
-    args.add_argument("--tensorboard", nargs = "?", type = bool, default = False)
+    args.add_argument("--tensorboard", nargs = "?", type = bool, default = True)
     args = args.parse_args()
 
     # path and file management
@@ -360,7 +363,8 @@ if __name__ == "__main__":
                 if global_step % args.save_every == 0:
                     print(f"📀 Saving Model.... at: {model_path}")
                     torch.save(model.state_dict(), model_path)
-
+                    if args.tensorboard:
+                        summary_writer.flush()
                 global_step += 1
 
             # dataset.set_val_mode(False)
