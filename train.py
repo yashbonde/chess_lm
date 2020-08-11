@@ -335,6 +335,8 @@ if __name__ == "__main__":
     
     summary_writer = None
     loss = -1
+    prev_loss = -1
+    symbol = "🆕"
     # total_steps = args.num_epoch * len(dataset)
     if args.tensorboard:
         summary_writer = tb.SummaryWriter(log_dir=model_folder, comment="Hello World!", flush_secs=20)
@@ -348,8 +350,9 @@ if __name__ == "__main__":
             for bidx, b in zip(pbar, dataset):
                 if not isinstance(loss, int):
                     loss = loss.item()
-                pbar.set_description(
-                    f"Epoch: {e}, TRAIN, batch: {bidx}, loss: {round(loss, 3)}")
+                    symbol = "⬆️" if prev_loss < loss else "⬇️"
+                    prev_loss = loss
+                pbar.set_description(f"Epoch: {e}, TRAIN, batch: {bidx}, loss: {round(loss, 3)} {symbol}")
                 model.zero_grad()
                 out = model(**b, labels=b["input_ids"])
                 loss, logits = out[:2]
