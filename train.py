@@ -335,12 +335,12 @@ if __name__ == "__main__":
     
     summary_writer = None
     loss = -1
-    total_steps = args.num_epoch * len(dataset)
+    # total_steps = args.num_epoch * len(dataset)
     if args.tensorboard:
         summary_writer = tb.SummaryWriter(log_dir=model_folder, comment="Hello World!", flush_secs=20)
 
     try:
-        lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optim, lambda e: total_steps, last_epoch=-1, verbose=False)
+        # lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optim, lambda e: total_steps, last_epoch=-1, verbose=False)
         for e in range(args.num_epochs):
             # dataset.set_train_mode(False) # dep
             model.train()
