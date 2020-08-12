@@ -33,8 +33,16 @@ CUDA = bool(torch.cuda.device_count())
 if CUDA:
     print("🔌 Found CUDA ... Happy Hunting!")
 
+try:
+    from apex import amp
+    APEX = True
+except Exception as e:
+    print("Could not import Apex... will not be using it!")
+    APEX = False
+
+
 class DataLoader(object):
-    def __init__(self, lm_fpath, res_fpath, move_to_id_fpath, maxlen, buffer_size = 1e4, batch_size=4028, train_val_split=0.1, upto=-1):
+    def __init__(self, lm_fpath, res_fpath, move_to_id_fpath, maxlen, buffer_size=1e4, batch_size=4028, train_val_split=0.1, upto=-1):
         """
         Main dataloader iterator object
 
@@ -55,7 +63,7 @@ class DataLoader(object):
 
         # the dataset file is too big to load in one go so need to make a iterative reader/parser
         self.lm_path = lm_fpath
-        self.res_fpath = res_fpath        
+        self.res_fpath = res_fpath
         self.batch_size = batch_size
         self.maxlen = maxlen
         self.buffer_size = buffer_size
@@ -84,86 +92,29 @@ class DataLoader(object):
         res = str(res.strip())
 
         if len(lm) < maxlen - 2:
-            lm = lm + [self.m2id["[result]"], self.m2id.get(res),] + [self.m2id["[pad]"], ]*(maxlen-lmlen-2)
+            lm = lm + [self.m2id["[result]"],
+                       self.m2id.get(res), ] + [self.m2id["[pad]"], ]*(maxlen-lmlen-2)
             am = [1, ]*lmlen + [0, ]*(maxlen-lmlen)
             out = [lm]
             am = [am]
 
         else:
             # go over each model for result thingy
-            lmstacked = self._rolling_window(np.asarray(lm), maxlen - 2)  # [lm[i] for i in idx]
-            am = [[1,]*maxlen,]*len(lmstacked)
+            lmstacked = self._rolling_window(np.asarray(
+                lm), maxlen - 2)  # [lm[i] for i in idx]
+            am = [[1, ]*maxlen, ]*len(lmstacked)
 
             multipier = np.asarray([0, ] + [-int(i % 2 == 1) for i in range(len(lmstacked) - 1)]) + \
-                np.asarray([1, ] + [int(i % 2 != 1) for i in range(len(lmstacked) - 1)])
+                np.asarray([1, ] + [int(i % 2 != 1)
+                                    for i in range(len(lmstacked) - 1)])
             multipier *= int(res)
             multipier = list(map(lambda x: self.m2id[str(x)], multipier))
             out = np.vstack((
                 lmstacked.T, np.ones(len(multipier), dtype=int) *
                 self.m2id["[result]"], multipier
             )).T.tolist()
-        
+
         return out, am
-
-    # def parse_and_store(self, maxlen):
-    #     data = []
-    #     attentions = []
-    #     pbar = trange(len(self.lms))
-    #     # for idx, lm in enumerate(self.lms):
-    #     for idx in pbar:
-    #         pbar.set_description( f"parsing {idx + 1}, {((idx + 1)/len(self.lms)*100)}% done!")
-    #         lm = self.lms[idx]
-    #         lmlen = len(lm)
-
-    #         if len(lm) < maxlen - 2:
-    #             lm = (
-    #                 self.lms[idx] +
-    #                 [
-    #                     self.m2id["[result]"],
-    #                     self.m2id.get(str(self.results[idx])),
-    #                 ] +
-    #                 [self.m2id["[pad]"], ]*(maxlen-lmlen-2))
-    #             am = [1, ]*lmlen + [0, ]*(maxlen-lmlen)
-    #             out = [lm]
-    #             am = [am]
-
-    #         else:
-    #             # go over each model for result thingy
-    #             lmstacked = self._rolling_window(np.asarray(lm), maxlen - 2)  # [lm[i] for i in idx]
-    #             am = [[1,]*maxlen,]*len(lmstacked)
-
-    #             multipier = np.asarray([0, ] + [-int(i % 2 == 1) for i in range(len(lmstacked) - 1)]) + \
-    #                 np.asarray([1, ] + [int(i % 2 != 1) for i in range(len(lmstacked) - 1)])
-    #             multipier *= self.results[idx]
-    #             multipier = list(map(lambda x: self.m2id[str(x)], multipier))
-    #             out = np.vstack((
-    #                 lmstacked.T, np.ones(len(multipier), dtype=int) *
-    #                 self.m2id["[result]"], multipier
-    #             )).T.tolist()
-            
-    #         data.extend(out)
-    #         attentions.extend(am)
-
-    #     self.idx = np.arange(len(self.lms))
-    #     np.random.shuffle(self.idx)
-    #     split_idx = int(self.idx.shape[0] * self.train_val_split)
-
-    #     self.val_dataset = np.asarray(data[:split_idx])
-    #     self.val_attention_masks = np.asarray(attentions[:split_idx])
-    #     self.train_attention_masks = np.asarray(attentions[split_idx:])
-    #     self.train_dataset = np.asarray(data[split_idx:])
-
-    # def set_train_mode(self, verbose = False):
-    #     if verbose:
-    #         print("💡 Using TRAIN dataset")
-    #     self.data = self.train_dataset
-    #     self.attention_mask = self.train_attention_masks
-
-    # def set_val_mode(self, verbose = False):
-    #     if verbose:
-    #         print("💡 Using VALIDATION dataset")
-    #     self.data = self.val_dataset
-    #     self.attention_mask = self.val_attention_masks
 
     def __len__(self):
         self.total_lines = None
@@ -183,16 +134,16 @@ class DataLoader(object):
                 if not _lm:
                     continue
                 _lm, _attention_mask = self.parse(_lm, _res, self.maxlen)
-                
+
                 padded_lm.extend(_lm)
                 attentions.extend(_attention_mask)
 
                 if len(padded_lm) > self.buffer_size:
+                    idx = np.arange(len(padded_lm))
+                    np.random.shuffle(idx)
+                    padded_lm = np.asarray(padded_lm)[idx].tolist()
+                    attentions = np.asarray(attentions)[idx].tolist()
                     while (len(padded_lm) > self.batch_size):
-                        idx = np.arange(len(padded_lm))
-                        np.random.shuffle(idx)
-                        padded_lm = np.asarray(padded_lm)[idx].tolist()
-                        attentions = np.asarray(attentions)[idx].tolist()
                         if CUDA:
                             out = {
                                 "input_ids": torch.from_numpy(np.asarray(padded_lm[:self.batch_size])).long().cuda(),
@@ -208,21 +159,6 @@ class DataLoader(object):
                         del attentions[:self.batch_size]
 
                         yield out
-
-
-    # def __iter__(self):
-    #     idx = np.arange(self.data.shape[0])
-    #     np.random.shuffle(idx)
-    #     stack = []
-    #     for batched_ids in self._sliding_buckets(idx, self.batch_size):
-    #         stack.append({
-    #             "input_ids": torch.from_numpy(self.data[batched_ids]).long(),
-    #             "attention_mask": torch.from_numpy(self.attention_mask[batched_ids]).long()
-    #         })
-
-    #     # return iterator over data
-    #     return iter(stack)
-
 
 def accuracy(b, logits):
     # (upto -1) compared to (from 1)
@@ -257,9 +193,9 @@ if __name__ == "__main__":
                       help="Either to train the model from scratch (t) or finetune (f)")
 
     # data args
-    args.add_argument("--lm", type=str, required = True,
+    args.add_argument("--lm", type=str, required=True,
                       help="path to lm file")
-    args.add_argument("--res", type=str, required = True,
+    args.add_argument("--res", type=str, required=True,
                       help="path to res file")
     args.add_argument("--m2id", type=str, required=True,
                       help="path to move_to_id json")
@@ -277,7 +213,6 @@ if __name__ == "__main__":
                       help="Saved model to have filepath `<model>.pt`")
     args.add_argument("--save_every", type=int, default=1000,
                       help="Save model every this global steps")
-    args.add_argument("--tensorboard", nargs = "?", type = bool, default = True)
     args = args.parse_args()
 
     # path and file management
@@ -297,9 +232,6 @@ if __name__ == "__main__":
         })
         config = GPT2Config(**raw_config)
         print(config)
-    model = GPT2LMHeadModel(config)
-    if CUDA:
-        model.cuda()
 
     # load dataset
     dataset = DataLoader(
@@ -310,14 +242,36 @@ if __name__ == "__main__":
         batch_size=config.batch_size,
         train_val_split=args.train_val_split,
         upto=-1,
-        buffer_size = raw_config["buffer_size"]
+        buffer_size=raw_config["buffer_size"]
     )
+
+    # load model and optimzer based on APEX/CUDA configurations
+    model = GPT2LMHeadModel(config)
+    optim = getattr(torch.optim, raw_config["optimizer"])(params=model.parameters(), **raw_config["optimizer_params"])
+    if APEX:
+        model, optim = amp.initialize(model, optim, opt_level="O1")
+    else:
+        if CUDA:
+            model.cuda()
 
     # if user is going to finetune an existing model
     if args.tf == "f":
-        assert os.path.exists(model_path), f"Model not found on path: {model_path}"
+        assert os.path.exists(
+            model_path), f"Model not found on path: {model_path}"
         print(f"🔋 Finetuning model at: {model_path}")
-        model.load_state_dict(torch.load(model_path))
+        checkpoint = torch.load(model_path)
+        if APEX:
+            print("Loading from APEX Checkpoint")
+            model.load_state_dict(checkpoint["model"])
+            optim.load_state_dict(checkpoint["optim"])
+            amp.load_state_dict(checkpoint["amp"])
+        else:
+            print("Loading from Standard Checkpoint")
+            try:
+                model.load_state_dict(checkpoint["model"])
+                optim.load_state_dict(checkpoint["optim"])
+            except:
+                model.load_state_dict(torch.load(model_path))
     elif args.tf == "t":
         print(f"🔪 Training a new model")
 
@@ -331,67 +285,82 @@ if __name__ == "__main__":
     # now proceed to training
     global_step = 0
     val_step = 0
-    optim = getattr(torch.optim, raw_config["optimizer"])(params = model.parameters(), **raw_config["optimizer_params"])
-    
     summary_writer = None
     loss = -1
     prev_loss = -1
     symbol = "🆕"
     # total_steps = args.num_epoch * len(dataset)
-    if args.tensorboard:
-        summary_writer = tb.SummaryWriter(log_dir=model_folder, comment="Hello World!", flush_secs=20)
+    # if args.tensorboard:
+    with tb.SummaryWriter(log_dir=model_folder, comment="Hello World!", flush_secs=20) as summary_writer:
+        try:
+            # lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optim, lambda e: total_steps, last_epoch=-1, verbose=False)
+            for e in range(args.num_epochs):
+                # dataset.set_train_mode(False) # dep
+                model.train()
+                pbar = trange(len(dataset))
+                for bidx, b in zip(pbar, dataset):
+                    if not isinstance(loss, int):
+                        loss = loss.item()
+                        symbol = "⬆️" if prev_loss < loss else "⬇️"
+                        prev_loss = loss
+                    pbar.set_description(
+                        f"Epoch: {e}, TRAIN, batch: {bidx}, loss: {round(loss, 3)} {symbol}")
+                    model.zero_grad()
+                    out = model(**b, labels=b["input_ids"])
+                    loss, logits = out[:2]
+                    
+                    if APEX:
+                        with amp.scale_loss(loss, optim) as scaled_loss:
+                            scaled_loss.backward()
+                    else:
+                        loss.backward()                
+                    optim.step()
 
-    try:
-        # lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optim, lambda e: total_steps, last_epoch=-1, verbose=False)
-        for e in range(args.num_epochs):
-            # dataset.set_train_mode(False) # dep
-            model.train()
-            pbar = trange(len(dataset))
-            for bidx, b in zip(pbar, dataset):
-                if not isinstance(loss, int):
-                    loss = loss.item()
-                    symbol = "⬆️" if prev_loss < loss else "⬇️"
-                    prev_loss = loss
-                pbar.set_description(f"Epoch: {e}, TRAIN, batch: {bidx}, loss: {round(loss, 3)} {symbol}")
-                model.zero_grad()
-                out = model(**b, labels=b["input_ids"])
-                loss, logits = out[:2]
-                loss.backward()
-                optim.step()
-
-                total_acc, winner_acc = accuracy(b, logits)
-                if args.tensorboard:
-                    summary_writer.add_scalar( "Loss/Train", loss.item(), global_step, walltime=time.time())
-                    summary_writer.add_scalar( "Accuracy/Train_Total", total_acc * 100, global_step, walltime=time.time())
-                    summary_writer.add_scalar( "Accuracy/Train_Winner_Prediction", winner_acc * 100, global_step, walltime=time.time())
-
-                if global_step % args.save_every == 0:
-                    print(f"📀 Saving Model.... at: {model_path}")
-                    torch.save(model.state_dict(), model_path)
+                    total_acc, winner_acc = accuracy(b, logits)
                     if args.tensorboard:
+                        summary_writer.add_scalar(
+                            "Loss/Train", loss.item(), global_step, walltime=time.time())
+                        summary_writer.add_scalar(
+                            "Accuracy/Train_Total", total_acc * 100, global_step, walltime=time.time())
+                        summary_writer.add_scalar(
+                            "Accuracy/Train_Winner_Prediction", winner_acc * 100, global_step, walltime=time.time())
+
+                    if global_step % args.save_every == 0:
+                        print(f"📀 Saving Model.... at: {model_path}")
+                        # Save checkpoint
+                        checkpoint = {
+                            'model': model.state_dict(),
+                            'optim': optim.state_dict()
+                        }
+                        if APEX:
+                            checkpoint.update({'amp': amp.state_dict()})
+                        torch.save(checkpoint, model_path)
                         summary_writer.flush()
-                global_step += 1
+                    global_step += 1
 
-            # dataset.set_val_mode(False)
-            # model.eval()
-            # pbar = trange(len(dataset))
-            # for bidx, b in zip(pbar, dataset):
-            #     pbar.set_description(f"Epoch: {e}, VAL, batch: {bidx}")
-            #     out = model(**b, labels=b["input_ids"])
-            #     loss, logits = out[:2]
+                # dataset.set_val_mode(False)
+                # model.eval()
+                # pbar = trange(len(dataset))
+                # for bidx, b in zip(pbar, dataset):
+                #     pbar.set_description(f"Epoch: {e}, VAL, batch: {bidx}")
+                #     out = model(**b, labels=b["input_ids"])
+                #     loss, logits = out[:2]
 
-            #     total_acc, winner_acc = accuracy(b, logits)
-            #     if args.tensorboard:
-            #         summary_writer.add_scalar("Loss/Val", loss.item(), val_step, walltime= time.time())
-            #         summary_writer.add_scalar("Accuracy/Val_Total", total_acc * 100, val_step, walltime=time.time())
-            #         summary_writer.add_scalar("Accuracy/Val_Winner_Prediction", winner_acc * 100, val_step, walltime=time.time())
+                #     total_acc, winner_acc = accuracy(b, logits)
+                #     if args.tensorboard:
+                #         summary_writer.add_scalar("Loss/Val", loss.item(), val_step, walltime= time.time())
+                #         summary_writer.add_scalar("Accuracy/Val_Total", total_acc * 100, val_step, walltime=time.time())
+                #         summary_writer.add_scalar("Accuracy/Val_Winner_Prediction", winner_acc * 100, val_step, walltime=time.time())
 
-            #     val_step += 1
-    except KeyboardInterrupt as e:
-        print("Keyboard Interrupt Detected, quiting training")
+                #     val_step += 1
+        except KeyboardInterrupt as e:
+            print("Keyboard Interrupt Detected, quiting training")
 
-    print(f"📀 Saving Model.... at: {model_path}")
-    torch.save(model.state_dict(), model_path)
-        
-    if args.tensorboard:
-        summary_writer.close()
+        print(f"📀 Saving Model.... at: {model_path}")
+        checkpoint = {
+            'model': model.state_dict(),
+            'optim': optim.state_dict()
+        }
+        if APEX:
+            checkpoint.update({'amp': amp.state_dict()})
+        torch.save(checkpoint, model_path)
