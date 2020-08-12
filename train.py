@@ -157,12 +157,12 @@ class DataLoader(object):
 
                         del padded_lm[:self.batch_size]
                         del attentions[:self.batch_size]
-
                         yield out
+
 
 def accuracy(b, logits):
     # (upto -1) compared to (from 1)
-    if CUDA:
+    if CUDA and APEX:
         input_ids = b["input_ids"].detach().cpu().numpy()
         pred_ids = torch.argmax(logits, dim=-1).detach().cpu().numpy()
     else:
@@ -247,12 +247,13 @@ if __name__ == "__main__":
 
     # load model and optimzer based on APEX/CUDA configurations
     model = GPT2LMHeadModel(config)
-    optim = getattr(torch.optim, raw_config["optimizer"])(params=model.parameters(), **raw_config["optimizer_params"])
-    if APEX:
+    optim = getattr(torch.optim, raw_config["optimizer"])(
+        params=model.parameters(), **raw_config["optimizer_params"])
+    if CUDA and APEX:
+        model.cuda()
+        print("BEFORE CUDA:", torch.cuda.max_memory_allocated()/1024**2)
         model, optim = amp.initialize(model, optim, opt_level="O1")
-    else:
-        if CUDA:
-            model.cuda()
+        print("AFTER CUDA:", torch.cuda.max_memory_allocated()/1024**2)
 
     # if user is going to finetune an existing model
     if args.tf == "f":
@@ -308,22 +309,18 @@ if __name__ == "__main__":
                     model.zero_grad()
                     out = model(**b, labels=b["input_ids"])
                     loss, logits = out[:2]
-                    
+
                     if APEX:
                         with amp.scale_loss(loss, optim) as scaled_loss:
                             scaled_loss.backward()
                     else:
-                        loss.backward()                
+                        loss.backward()
                     optim.step()
 
                     total_acc, winner_acc = accuracy(b, logits)
-                    if args.tensorboard:
-                        summary_writer.add_scalar(
-                            "Loss/Train", loss.item(), global_step, walltime=time.time())
-                        summary_writer.add_scalar(
-                            "Accuracy/Train_Total", total_acc * 100, global_step, walltime=time.time())
-                        summary_writer.add_scalar(
-                            "Accuracy/Train_Winner_Prediction", winner_acc * 100, global_step, walltime=time.time())
+                    summary_writer.add_scalar("Loss/Train", loss.item(), global_step, walltime=time.time())
+                    summary_writer.add_scalar("Accuracy/Train_Total", total_acc * 100, global_step, walltime=time.time())
+                    summary_writer.add_scalar("Accuracy/Train_Winner_Prediction", winner_acc * 100, global_step, walltime=time.time())
 
                     if global_step % args.save_every == 0:
                         print(f"📀 Saving Model.... at: {model_path}")
