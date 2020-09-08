@@ -13,7 +13,7 @@ from zipfile import ZipFile
 
 
 # loading the information already saved
-m2id = json.load(open('moveid.json', "r"))  # this is our special moves handler
+m2id = json.load(open('m2id.json', "r"))  # this is our special moves handler
 results = {
     "1-0": "1",
     '1/2-1/2': "0",
