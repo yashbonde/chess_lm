@@ -1,0 +1,94 @@
+[
+    {
+        "maxlen": 30,
+        "n_embd": 50,
+        "n_layer": 30,
+        "n_head": 1,
+        "vocab_size": 1799,
+        "activation_function": "gelu_new",
+        "resid_pdrop": 0.1,
+        "embd_pdrop": 0.1,
+        "attn_pdrop": 0.1,
+        "layer_norm_epsilon": 0.00001,
+        "initializer_range": 0.02,
+        "summary_type": "cls_index",
+        "summary_use_proj": true,
+        "summary_activation": null,
+        "summary_proj_to_labels": true,
+        "summary_first_dropout": 0.1,
+        "optimizer": "Adam",
+        "optimizer_params": {
+            "lr": 0.00025,
+            "betas": [
+                0.9,
+                0.999
+            ]
+        },
+        "batch_size": 1024,
+        "buffer_size": 100000,
+        "global_step": 7368
+    },
+    {
+        "activation_function": "gelu_new",
+        "attn_pdrop": 0.1,
+        "batch_size": 1024,
+        "bos_token_id": 50256,
+        "buffer_size": 100000,
+        "embd_pdrop": 0.1,
+        "eos_token_id": 50256,
+        "initializer_range": 0.02,
+        "layer_norm_epsilon": 0.00001,
+        "maxlen": 30,
+        "model_type": "gpt2",
+        "n_ctx": 30,
+        "n_embd": 50,
+        "n_head": 1,
+        "n_layer": 30,
+        "n_positions": 30,
+        "optimizer": "Adam",
+        "optimizer_params": {
+            "betas": [
+                0.9,
+                0.999
+            ],
+            "lr": 0.05
+        },
+        "resid_pdrop": 0.1,
+        "summary_activation": null,
+        "summary_first_dropout": 0.1,
+        "summary_proj_to_labels": true,
+        "summary_type": "cls_index",
+        "summary_use_proj": true,
+        "vocab_size": 1799,
+        "global_step": 6536
+    },
+    {
+        "maxlen": 30,
+        "n_embd": 50,
+        "n_layer": 30,
+        "n_head": 1,
+        "vocab_size": 1799,
+        "activation_function": "gelu_new",
+        "resid_pdrop": 0.1,
+        "embd_pdrop": 0.1,
+        "attn_pdrop": 0.1,
+        "layer_norm_epsilon": 0.00001,
+        "initializer_range": 0.02,
+        "summary_type": "cls_index",
+        "summary_use_proj": true,
+        "summary_activation": null,
+        "summary_proj_to_labels": true,
+        "summary_first_dropout": 0.1,
+        "optimizer": "Adam",
+        "optimizer_params": {
+            "lr": 0.05,
+            "betas": [
+                0.9,
+                0.999
+            ]
+        },
+        "batch_size": 1024,
+        "buffer_size": 100000,
+        "global_step": 1085
+    }
+]
