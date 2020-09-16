@@ -13,7 +13,7 @@ from zipfile import ZipFile
 
 
 # loading the information already saved
-m2id = json.load(open('moveid.json', "r"))  # this is our special moves handler
+m2id = json.load(open('m2id.json', "r"))  # this is our special moves handler
 results = {
     "1-0": "1",
     '1/2-1/2': "0",
@@ -74,7 +74,7 @@ def parse_and_save_data(files, save_after):
                 cntr += 1 # update main counter
                 result = cg.headers["Result"]
                 if result is not "*":
-                    seq = [m2id["BOS"]] + [m2id[str(x.move)[:4]] for x in cg.mainline() if str(x.move)[:4] in m2id] + [m2id["EOS"]]
+                    seq = [m2id["[bos]"]] + [m2id[str(x.move)[:4]] for x in cg.mainline() if str(x.move)[:4] in m2id] + [m2id["[eos]"]]
                     seqs.append(' '.join(list(map(str, seq))))
                     rseq.append(results[result])
 
