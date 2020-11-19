@@ -44,6 +44,7 @@ class BaseHFGPT(nn.Module):
             
             # MSE works best for value function
             loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
+            loss_value = loss_value.mean()
 
             loss = loss_policy + loss_value
             
