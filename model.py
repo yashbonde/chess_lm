@@ -4,7 +4,7 @@ import json
 import time
 import random
 import numpy as np
-from tqdm import tqdm
+from tqdm import tqdm, trange
 
 import torch
 from torch import nn
@@ -42,10 +42,9 @@ class BaseHFGPT(nn.Module):
             targets = input_ids[:, 1:].contiguous().view(-1)
             loss_policy = F.cross_entropy(logits, targets)
             
-            # MSE works best for values
-            loss_value = (values - value_targets[:,1:]) ** 2
-            loss_value = loss_value.view(-1).float()
-            
+            # MSE works best for value function
+            loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
+
             loss = loss_policy + loss_value
             
             out = (logits, x, (loss, loss_policy, loss_value))
@@ -107,21 +106,23 @@ class Trainer:
                         pbar.set_description(f"[VAL] Epoch: {_gs}")
                         
                     d = {k:v.to(self.device) for k,v in d.items()}
+                    
+                    # print({k:v.size() for k,v in d.items()})
 
                     with torch.set_grad_enabled(is_train):
                         (out, _, loss) = model(loss = True, **d)
                         loss_total = loss[0].mean() # gather
                         loss_policy = loss[1].mean() # gather
                         loss_value = loss[2].mean() # gather
-                        losses.append(loss.item())
+                        losses.append(loss_total.item())
 
                     if is_train:
                         # add things to tb, loss and attention images
-                        tb.add_scalar("loss/loss_total", loss.item(), global_step=_gs, walltime=time.time())
+                        tb.add_scalar("loss/loss_total", loss_total.item(), global_step=_gs, walltime=time.time())
                         tb.add_scalar("loss/policy", loss_policy.item(), global_step=_gs, walltime=time.time())
                         tb.add_scalar("loss/value", loss_value.item(), global_step=_gs, walltime=time.time())
 
-                        loss.backward()
+                        loss_total.backward()
                         torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
                         optimizer.step()
                         _gs += 1
@@ -226,11 +227,15 @@ class ChessData(IterableDataset):
                 lms.extend([self.GAME] + lm)
                 
                 # get the targets for values as [0,res,-res,res,-res...]
+                game_res = float(game_res)
                 res = np.ones(len(lm)) * game_res
                 res[np.arange(1, len(lm), 2)] = -game_res
                 results.extend([0] + res.tolist()) # first will always generate 0
 
                 if len(lms) > config.buffer:
+                    # print("\n\n\n", len(lms), len(results))
+                    # print(len(lm), len(res))
+                    
                     # no of samples
                     batches = len(lms) // config.maxlen
                     samples = self._sliding_buckets(

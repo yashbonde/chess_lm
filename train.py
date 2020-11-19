@@ -45,9 +45,9 @@ args.add_argument(
 )
 
 # data args
-args.add_argument("--lmtrain", type=str, default = None, help="path to train_lm file")
+args.add_argument("--lmtrain", type=str, default = "agg_mv.txt", help="path to train_lm file")
 args.add_argument("--lmtest", type=str, default = None, help="path to test_lm file")
-args.add_argument("--res", type=str, default = None, help="path to res file")
+args.add_argument("--res", type=str, default = "agg_res.txt", help="path to res file")
 args.add_argument("--m2id", type=str, default = "m2id.json", help="path to move_to_id json")
 
 args.add_argument("--maxlen", type = int, default = 60, help = "maximum length")
@@ -77,6 +77,7 @@ model_path = os.path.join(model_folder, args.model + ".pt")
 
 dataConfig = DataConfig(
     lm=args.lmtrain,
+    rf=args.res,
     m2id=args.m2id,
     maxlen=args.maxlen,
     buffer= args.buffer,
