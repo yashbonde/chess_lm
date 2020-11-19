@@ -24,17 +24,31 @@ class BaseHFGPT(nn.Module):
         super().__init__()
         self.config = config
         self.gpt = GPT2Model(config)
-        self.lmhead = nn.Linear(config.n_embd, config.vocab_size, bias = False)
+        self.policy_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
+        self.value_head = nn.Sequential(
+            nn.Linear(config.n_embd, config.n_embd // 2),
+            nn.ReLU(),
+            nn.Linear(config.n_embd // 2, 1),
+        )
 
-    def forward(self, input_ids, loss = None, **gptkwargs):
+    def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
         x = self.gpt(input_ids, return_dict = True, **gptkwargs)
-        logits = self.lmhead(x.last_hidden_state)
+        logits = self.policy_head(x.last_hidden_state)
+        values = torch.tanh(self.value_head(x.last_hidden_state))
         out = (logits, x)
-        if loss is not None:
+        if loss is not None and value_targets is not None:            
+            # Categorical cross entropy loss worked best for policy
             logits = logits[:, :-1, :].contiguous().view(-1, logits.size(-1))
             targets = input_ids[:, 1:].contiguous().view(-1)
-            loss = F.cross_entropy(logits, targets)
-            out = (logits, x, loss)
+            loss_policy = F.cross_entropy(logits, targets)
+            
+            # MSE works best for values
+            loss_value = (values - value_targets[:,1:]) ** 2
+            loss_value = loss_value.view(-1).float()
+            
+            loss = loss_policy + loss_value
+            
+            out = (logits, x, (loss, loss_policy, loss_value))
         return out
 
 
@@ -44,7 +58,7 @@ class BaseHFGPT(nn.Module):
 ################################################
 
 class Trainer:
-    def __init__(self, model, train_dataset, test_dataset, config):
+    def __init__(self, model, train_dataset, config, test_dataset = None):
         self.model = model
         self.train_dataset = train_dataset
         self.test_dataset = test_dataset
@@ -54,6 +68,7 @@ class Trainer:
         if torch.cuda.is_available():
             self.device = torch.cuda.current_device()
             self.model = torch.nn.DataParallel(self.model).to(self.device)
+            print("Model is now CUDA!")
 
     def save_checkpoint(self):
         raw_model = self.model.module if hasattr(self.model, "module") else self.model
@@ -78,29 +93,33 @@ class Trainer:
                     pin_memory = True,
                     batch_size = config.batch_size
                 )
+                
+                num_batches = len(data) // config.batch_size + int(len(data) % config.batch_size != 0)
 
                 losses = []
-                pbar = tqdm(enumerate(dl))
-                for it, d in pbar:
+                # pbar = tqdm(enumerate(dl))
+                pbar = trange(num_batches, ncols = 100)
+                for it, d in zip(pbar, dl):
                     _l = -1 if not losses else losses[-1]
                     if is_train:
                         pbar.set_description(f"[TRAIN] GS: {_gs}, IT: {it}, Loss: {round(_l, 5)}")
                     else:
                         pbar.set_description(f"[VAL] Epoch: {_gs}")
+                        
+                    d = {k:v.to(self.device) for k,v in d.items()}
 
                     with torch.set_grad_enabled(is_train):
                         (out, _, loss) = model(loss = True, **d)
+                        loss_total = loss[0].mean() # gather
+                        loss_policy = loss[1].mean() # gather
+                        loss_value = loss[2].mean() # gather
                         losses.append(loss.item())
 
                     if is_train:
                         # add things to tb, loss and attention images
-                        tb.add_scalar("loss", loss.item(), global_step=_gs, walltime=time.time())
-                        # for l, att in enumerate(attentions):
-                        #     tb.add_image(
-                        #         f"attention/layer_{l}", att[0][0],
-                        #         global_step=gs, walltime=time.time(),
-                        #         dataformats= "HW"
-                        #     )
+                        tb.add_scalar("loss/loss_total", loss.item(), global_step=_gs, walltime=time.time())
+                        tb.add_scalar("loss/policy", loss_policy.item(), global_step=_gs, walltime=time.time())
+                        tb.add_scalar("loss/value", loss_value.item(), global_step=_gs, walltime=time.time())
 
                         loss.backward()
                         torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
@@ -118,15 +137,16 @@ class Trainer:
             gs = 1
             for e in range(config.max_epochs):
                 gs = run_epoch("train", gs)
-                if self.test_dataset is not None:
-                    test_loss = run_epoch("test", e)
-                    print(f"Test loss: {test_loss}")
+                self.save_checkpoint()
+#                 if self.test_dataset is not None:
+#                     test_loss = run_epoch("test", e)
+#                     print(f"Test loss: {test_loss}")
                 
-                # early stopping based on the test loss of just save always if no test set is provided
-                good_model = self.test_dataset is None or test_loss < best_loss
-                if self.config.ckpt_path is not None and good_model:
-                    best_loss = test_loss
-                    self.save_checkpoint()
+#                 # early stopping based on the test loss of just save always if no test set is provided
+#                 good_model = self.test_dataset is None or test_loss < best_loss
+#                 if self.config.ckpt_path is not None and good_model:
+#                     best_loss = test_loss
+#                     self.save_checkpoint()
 
 
 class TrainerConfig:
@@ -178,6 +198,9 @@ class ChessData(IterableDataset):
 
         with open(config.m2id, "r") as m:
             self.m2id = json.load(m)
+            self.GAME = len(self.m2id)
+            self.m2id["[GAME]"] = self.GAME # new game flag
+            
         self.id2m = {i:m for i,m in self.m2id.items()}
         self.config = config
 
@@ -193,19 +216,19 @@ class ChessData(IterableDataset):
         # return buckets of size seqlen
         return [x[i*s:(i+1)*s] for i in range((len(x) // s) + min(len(x) % s, 1))]
 
-    # @staticmethod
-    # def _rolling_window(a, window_size):
-    #     shape = a.shape[:-1] + (a.shape[-1] - window_size + 1, window_size)
-    #     strides = a.strides + (a.strides[-1],)
-    #     return np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides)
-
     def __iter__(self):
         config = self.config
-        with open(config.lm, "r") as flm:
-            lms = []
-            for lm in flm:    
-                lm = list(map( lambda x: int(x.strip()), lm.split() ))
-                lms.extend(lm)
+        with open(config.lm, "r") as flm, open(config.rf, "r") as fres:
+            lms = [] # all the sequences
+            results = [] # all the results
+            for lm, lr in zip(flm, fres):    
+                lm = list(map(lambda x: int(x.strip()), lm.split()))
+                lms.extend([self.GAME] + lm)
+                
+                # get the targets for values as [0,res,-res,res,-res...]
+                res = np.ones(len(game)) * lr
+                res[np.arange(1, len(game), 2)] = -lr
+                results.extend([0] + res.tolist()) # first will always generate 0
                 if len(lms) > config.buffer:
                     # no of samples
                     batches = len(lms) // config.maxlen
@@ -213,14 +236,24 @@ class ChessData(IterableDataset):
                         np.asarray(lms[:config.maxlen * batches]),
                         config.maxlen
                     )
-                    np.random.shuffle(samples)
-                    for s in samples:
-                        out = {"input_ids": torch.from_numpy(s).long()}
+                    values = self._sliding_buckets(
+                        np.asarray(results[:config.maxlen * batches]),
+                        config.maxlen
+                    )
+                    idx = np.arange(len(values))
+                    np.random.shuffle(idx)
+                    for i in idx:
+                        out = {
+                            "input_ids": torch.from_numpy(samples[i]).long(),
+                            "value_targets": torch.from_numpy(values[i]).float()
+                        }
                         yield out
                     del lms[:config.maxlen * batches]
+                    del results[:config.maxlen * batches]
 
 class DataConfig:
     lm = None
+    rf = None # results file
     m2id = None
     maxlen = None
     buffer= None
@@ -234,10 +267,7 @@ class DataConfig:
     def __repr__(self):
         return "---- TRAINER CONFIGURATION ----\n" + \
             "\n".join([f"{k}\t{getattr(self, k)}" for k in list(set([
-                "lm",
-                "m2id",
-                "maxlen",
-                "buffer",
+                "lm", "rm", "m2id", "maxlen", "buffer"
             ] + self.attrs))
         ]) + "\n"
 
