@@ -221,14 +221,15 @@ class ChessData(IterableDataset):
         with open(config.lm, "r") as flm, open(config.rf, "r") as fres:
             lms = [] # all the sequences
             results = [] # all the results
-            for lm, lr in zip(flm, fres):    
+            for lm, game_res in zip(flm, fres):    
                 lm = list(map(lambda x: int(x.strip()), lm.split()))
                 lms.extend([self.GAME] + lm)
                 
                 # get the targets for values as [0,res,-res,res,-res...]
-                res = np.ones(len(game)) * lr
-                res[np.arange(1, len(game), 2)] = -lr
+                res = np.ones(len(lm)) * game_res
+                res[np.arange(1, len(lm), 2)] = -game_res
                 results.extend([0] + res.tolist()) # first will always generate 0
+
                 if len(lms) > config.buffer:
                     # no of samples
                     batches = len(lms) // config.maxlen
