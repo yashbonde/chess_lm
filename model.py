@@ -2,6 +2,7 @@
 
 import json
 import time
+import chess
 import random
 import numpy as np
 from tqdm import tqdm, trange
@@ -50,8 +51,6 @@ class BaseHFGPT(nn.Module):
             
             out = (logits, x, (loss, loss_policy, loss_value))
         return out
-
-
 
 ################################################
 ####### Trainer ################################
@@ -278,153 +277,3 @@ class DataConfig:
             ] + self.attrs))
         ]) + "\n"
 
-
-
-
-# def accuracy(b, logits):
-#     # (upto -1) compared to (from 1)
-#     if CUDA and APEX:
-#         input_ids = b["input_ids"].detach().cpu().numpy()
-#         pred_ids = torch.argmax(logits, dim=-1).detach().cpu().numpy()
-#     else:
-#         input_ids = b["input_ids"].detach().numpy()
-#         pred_ids = torch.argmax(logits, dim=-1).detach().numpy()
-#     corr = 0
-#     total = 0
-#     win_corr = 0
-#     for i in range(input_ids.shape[0]):
-#         if CUDA:
-#             ids = np.where(b["attention_mask"][i].detach().cpu().numpy() == 1)[0]
-#         else:
-#             ids = np.where(b["attention_mask"][i].detach().numpy() == 1)[0]
-#         _actual = input_ids[i][ids]
-#         _pred = pred_ids[i][ids]
-
-#         corr += sum(_actual[:-1] == _pred[1:])
-#         win_corr += int(_actual[-1] == _pred[-2])
-#         total += len(ids)
-
-#     return corr/total, win_corr/len(input_ids)
-
-    
-
-
-# ---- Legacy ---- #
-
-# class DataLoader(object):
-#     def __init__(self, lm_fpath, res_fpath, move_to_id_fpath, maxlen, buffer_size=1e4, batch_size=4028, train_val_split=0.1, upto=-1):
-#         """
-#         Main dataloader iterator object
-
-#         :param lm_fpath: file path for integers dump file
-#         :param res_fpath: file path for results dump file
-#         :param move_to_id_fpath: file path for moves2id json file
-#         :param maxlen: maximum length of sequence
-#         :param train_val_split: ratio for validation dataset size to total dataset
-#         """
-#         self.train_val_split = train_val_split
-#         st = time.time()
-#         with open(move_to_id_fpath, "r") as m:
-#             self.m2id = json.load(m)
-#         print(f"⏳ Loading complete took {time.time() - st}s")
-
-#         # self._update_m2id("[result]", max(self.m2id.values()) + 1)
-#         # self._update_m2id("[pad]", max(self.m2id.values()) + 1)
-
-#         # the dataset file is too big to load in one go so need to make a iterative reader/parser
-#         self.lm_path = lm_fpath
-#         self.res_fpath = res_fpath
-#         self.batch_size = batch_size
-#         self.maxlen = maxlen
-#         self.buffer_size = buffer_size
-
-#         # self.parse_and_store(maxlen)
-#         # self.set_train_mode(True)
-
-#     def _update_m2id(self, key, value):
-#         if key not in self.m2id:
-#             self.m2id.update({key: value})
-
-#     @staticmethod
-#     def _rolling_window(a, window_size):
-#         shape = a.shape[:-1] + (a.shape[-1] - window_size + 1, window_size)
-#         strides = a.strides + (a.strides[-1],)
-#         return np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides)
-
-#     @staticmethod
-#     def _sliding_buckets(x, s):
-#         # return buckets of size seqlen
-#         return [x[i*s:(i+1)*s] for i in range((len(x) // s) + min(len(x) % s, 1))]
-
-#     def parse(self, lm, res, maxlen):
-#         lm = list(map(lambda x: int(x.strip()), lm.split()))
-#         lmlen = len(lm)
-#         res = str(res.strip())
-
-#         if len(lm) < maxlen - 2:
-#             lm = lm + [self.m2id["[result]"],
-#                        self.m2id.get(res), ] + [self.m2id["[pad]"], ]*(maxlen-lmlen-2)
-#             am = [1, ]*lmlen + [0, ]*(maxlen-lmlen)
-#             out = [lm]
-#             am = [am]
-
-#         else:
-#             # go over each model for result thingy
-#             lmstacked = self._rolling_window(np.asarray(
-#                 lm), maxlen - 2)  # [lm[i] for i in idx]
-#             am = [[1, ]*maxlen, ]*len(lmstacked)
-
-#             multipier = np.asarray([0, ] + [-int(i % 2 == 1) for i in range(len(lmstacked) - 1)]) + \
-#                 np.asarray([1, ] + [int(i % 2 != 1)
-#                                     for i in range(len(lmstacked) - 1)])
-#             multipier *= int(res)
-#             multipier = list(map(lambda x: self.m2id[str(x)], multipier))
-#             out = np.vstack((
-#                 lmstacked.T, np.ones(len(multipier), dtype=int) *
-#                 self.m2id["[result]"], multipier
-#             )).T.tolist()
-
-#         return out, am
-
-#     def __len__(self):
-#         self.total_lines = None
-#         if self.total_lines is None:
-#             self.total_lines = 0
-#             with open(self.lm_path, "r") as f:
-#                 for _ in f:
-#                     self.total_lines += 1
-
-#         return (self.total_lines // self.batch_size) + min(self.total_lines % self.batch_size, 1)
-
-#     def __iter__(self):
-#         with open(self.lm_path, "r") as lm, open(self.res_fpath, "r") as res:
-#             padded_lm = []
-#             attentions = []
-#             for _lm, _res in zip(lm, res):
-#                 if not _lm:
-#                     continue
-#                 _lm, _attention_mask = self.parse(_lm, _res, self.maxlen)
-
-#                 padded_lm.extend(_lm)
-#                 attentions.extend(_attention_mask)
-
-#                 if len(padded_lm) > self.buffer_size:
-#                     idx = np.arange(len(padded_lm))
-#                     np.random.shuffle(idx)
-#                     padded_lm = np.asarray(padded_lm)[idx]
-#                     attentions = np.asarray(attentions)[idx]
-#                     while (len(padded_lm) > self.batch_size):
-#                         if CUDA:
-#                             out = {
-#                                 "input_ids": torch.from_numpy(np.asarray(padded_lm[:self.batch_size])).long().cuda(),
-#                                 "attention_mask": torch.from_numpy(np.asarray(attentions[:self.batch_size])).long().cuda()
-#                             }
-#                         else:
-#                             out = {
-#                                 "input_ids": torch.from_numpy(np.asarray(padded_lm[:self.batch_size])).long(),
-#                                 "attention_mask": torch.from_numpy(np.asarray(attentions[:self.batch_size])).long()
-#                             }
-
-#                         del padded_lm[:self.batch_size]
-#                         del attentions[:self.batch_size]
-#                         yield out
