@@ -78,6 +78,10 @@ I use 2x1080Ti configuration with 128 GB of RAM, `batch_size=350` seems to fill 
 * Larger embedding dimension in case of `v6` did not bring any considerable difference, smaller model like v3 after training for more than 2 epochs converges at the same result. Thus meaning that larger model only learns quicker but does not have any considerable advantages.
 * Larger `buffer_size`improves training. I started off with the `IterableDataset` because such a large file could not be loaded on the RAM. However with larger and more powerful computer, I am planning to load the complete dataset on the memory and use a `Dataset`.
 
+Consider the loss graph below, grey one is `v0` and blue one is `v7`, you can see that larger buffer improves the training and also makes it smoother.
+
+<img src="assets/loss.png" height=400px>
+
 ## What's the metric?
 
 So a natural question is how are the comparisons and testing done. Well there are a few things to compare here:
