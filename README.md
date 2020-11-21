@@ -23,7 +23,7 @@ There are few improvements to be done if you are interested:
 
 1. Introduce `multiprocessing` in the `download.py` to speed up the process, it was not needed in my case since I ran the code overnight on my laptop.
 2. Speed up downloads by using `FTP` scripts instead of `HTTP` used by `requests` package.
-3. Upload a neww version w/o the start and end tags
+3. Upload a new version of the agg.zip w/o the start and end tags
 
 Or skip this entire part and download the ZIP using the following command:
 ```
@@ -75,7 +75,7 @@ Consider the loss graph below, grey one is `v0` and blue one is `v7`, you can se
 This is the task list:
 - [x] Fix moves vocabulary and retrain
 - [ ] Perform Accuracy run on different models and log
-- [ ] Convert `IterableDataset` to `Dataset`
+- [x] Convert `IterableDataset` to `Dataset`
 - [ ] Integrate code with a web interface on [chessshhh](https://github.com/yashbonde/chessshhh)
 - [ ] Add Simple MinMax Tree search
 - [ ] Add more complicated search algorithm MCTS

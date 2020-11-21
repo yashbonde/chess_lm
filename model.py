@@ -215,8 +215,9 @@ class ChessData(IterableDataset):
             lms = [] # all the sequences
             results = [] # all the results
             for lm, game_res in zip(flm, fres):    
-                lm = list(map(lambda x: int(x.strip()), lm.split()))
-                lms.extend([self.GAME] + lm[1:-1]) # ignore BOS + EOS tags, [GAME] does it for us
+                # ignore BOS + EOS tags, [GAME] does it for us
+                lm = list(map(lambda x: int(x.strip()), lm.split()))[1:-1]
+                lms.extend([self.GAME] + lm)
                 
                 # get the targets for values as [0,res,-res,res,-res...]
                 game_res = float(game_res)
@@ -273,7 +274,7 @@ class ChessDataInMemory(Dataset):
         with open(config.lm, "r") as flm, open(config.rf, "r") as fres:
             lms = [] # all the sequences
             results = [] # all the results
-            print("Loading the samples")
+            print("Loading samples in memory ... this will take some time")
             for idx, lm, game_res in zip(trange(self.len), flm, fres):    
                 # ignore BOS + EOS tags, [GAME] does it for us
                 lm = list(map(lambda x: int(x.strip()), lm.split()))[1:-1]
