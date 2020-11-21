@@ -72,8 +72,8 @@ Consider the loss graph below, grey one is `v0` and blue one is `v7`, you can se
 ## Todo
 
 This is the task list:
-- [ ] Perform Accuracy run on different models and log
 - [ ] Fix moves vocabulary and retrain
+- [ ] Perform Accuracy run on different models and log
 - [ ] Convert `IterableDataset` to `Dataset`
 - [ ] Integrate code with a web interface on [chessshhh](https://github.com/yashbonde/chessshhh)
 - [ ] Add Simple MinMax Tree search
