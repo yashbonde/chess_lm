@@ -16,7 +16,7 @@ args.add_argument("--m2id", type=str, default = "m2id.json", help="path to move_
 
 args.add_argument("--maxlen", type = int, default = 60, help = "maximum length")
 
-arsg.add_argument("--")
+# arsg.add_argument("--")
 args.add_argument("--buffer", type = int, default = 99999, help = "buffer size for DataSet")
 args.add_argument("--n_embd", type = int, default = 128, help = "embedding dim")
 args.add_argument("--n_layer", type = int, default = 30, help = "number of layers of the model")

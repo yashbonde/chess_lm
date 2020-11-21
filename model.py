@@ -12,7 +12,7 @@ from torch.optim import Adam
 from torch.nn import functional as F
 from torch.utils.data import IterableDataset, DataLoader, Dataset
 from torch.utils.tensorboard import SummaryWriter
-from transformers import GPT2Model, GPT2Config
+from transformers import GPT2Model, GPT2Config as ModelConfig
 
 ################################################
 ####### Model ##################################
@@ -25,11 +25,12 @@ class BaseHFGPT(nn.Module):
         self.config = config
         self.gpt = GPT2Model(config)
         self.policy_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
-        self.value_head = nn.Sequential(
-            nn.Linear(config.n_embd, config.n_embd // 2),
-            nn.ReLU(),
-            nn.Linear(config.n_embd // 2, 1),
-        )
+#         self.value_head = nn.Sequential(
+#             nn.Linear(config.n_embd, config.n_embd // 2),
+#             nn.ReLU(),
+#             nn.Linear(config.n_embd // 2, 1),
+#         )
+        self.value_head = nn.Linear(config.n_embd, 1)
 
     def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
         x = self.gpt(input_ids, return_dict = True, **gptkwargs)
@@ -262,6 +263,8 @@ class ChessDataInMemory(Dataset):
             if "[GAME]" not in self.m2id:  # only if not found
                 self.GAME = len(self.m2id)
                 self.m2id["[GAME]"] = self.GAME  # new game flag
+            else:
+                self.GAME = self.m2id["[GAME]"]
 
         self.id2m = {i: m for i,m in self.m2id.items()}
         self.config = config
@@ -271,9 +274,10 @@ class ChessDataInMemory(Dataset):
             lms = [] # all the sequences
             results = [] # all the results
             print("Loading the samples")
-            for _, lm, game_res in zip(trange(self.len), flm, fres):    
-                lm = list(map(lambda x: int(x.strip()), lm.split()))
-                lms.extend([self.GAME] + lm[1:-1]) # ignore BOS + EOS tags, [GAME] does it for us
+            for idx, lm, game_res in zip(trange(self.len), flm, fres):    
+                # ignore BOS + EOS tags, [GAME] does it for us
+                lm = list(map(lambda x: int(x.strip()), lm.split()))[1:-1]
+                lms.extend([self.GAME] + lm)
                 
                 # get the targets for values as [0,res,-res,res,-res...]
                 game_res = float(game_res)
@@ -282,8 +286,16 @@ class ChessDataInMemory(Dataset):
                 results.extend([0] + res.tolist()) # first will always generate 0
 
         # now convert this long list to sequences
-        self.lms = np.asarray(ChessData._sliding_buckets(lms, config.maxlen))
-        self.results = np.asarray(ChessData._sliding_buckets(results, config.maxlen))
+        # using ChessData._sliding_buckets() is just ridiculously slow will have to use np.reshape
+        # method, but for this will need to drop the last few tokens.
+        # self.lms = np.asarray(ChessData._sliding_buckets(lms, config.maxlen))
+        # self.results = np.asarray(ChessData._sliding_buckets(results, config.maxlen))
+        
+        self.lms = np.array(lms[:-(len(lms) % config.maxlen)]).reshape(-1, config.maxlen)
+        self.results = np.array(results[:-(len(results) % config.maxlen)]).reshape(-1, config.maxlen)
+        
+    def __len__(self):
+        return self.lms.shape[0]
 
     def __getitem__(self, index):
         return {
