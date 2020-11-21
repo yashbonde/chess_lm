@@ -190,6 +190,8 @@ class ChessData(IterableDataset):
             if "[GAME]" not in self.m2id: # only if not found
                 self.GAME = len(self.m2id)
                 self.m2id["[GAME]"] = self.GAME # new game flag
+            else:
+                self.GAME = self.m2id["[GAME]"]
             
         self.id2m = {i:m for i,m in self.m2id.items()}
         self.config = config
