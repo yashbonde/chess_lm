@@ -15,6 +15,8 @@ args.add_argument("--res", type=str, default = "agg_res.txt", help="path to res 
 args.add_argument("--m2id", type=str, default = "m2id.json", help="path to move_to_id json")
 
 args.add_argument("--maxlen", type = int, default = 60, help = "maximum length")
+
+arsg.add_argument("--")
 args.add_argument("--buffer", type = int, default = 99999, help = "buffer size for DataSet")
 args.add_argument("--n_embd", type = int, default = 128, help = "embedding dim")
 args.add_argument("--n_layer", type = int, default = 30, help = "number of layers of the model")
@@ -27,10 +29,8 @@ args.add_argument("--beta2", type = int, default = 0.95, help = "Adam.beta2")
 # train args
 args.add_argument("--batch_size", type=int, default=350, help="batch size")
 args.add_argument("--num_epochs", type=int, default=1, help="Number of epochs to train / finetune")
-args.add_argument("--train_val_split", type=float, default=0.01, help="Ratio for validation dataset size to total dataset")
 args.add_argument("--save_folder", type=str, default="models", help="Folder to save model to")
 args.add_argument("--model", type=str, default="cgpt", help="Saved model to have filepath `<model>.pt`")
-args.add_argument("--save_every", type=int, default=1000, help="Save model every this global steps")
 args = args.parse_args()
 
 # path and file management

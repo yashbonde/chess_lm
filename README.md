@@ -23,6 +23,7 @@ There are few improvements to be done if you are interested:
 
 1. Introduce `multiprocessing` in the `download.py` to speed up the process, it was not needed in my case since I ran the code overnight on my laptop.
 2. Speed up downloads by using `FTP` scripts instead of `HTTP` used by `requests` package.
+3. Upload a neww version w/o the start and end tags
 
 Or skip this entire part and download the ZIP using the following command:
 ```
@@ -63,7 +64,7 @@ I use 2x1080Ti configuration with 128 GB of RAM, `batch_size=350` seems to fill 
 |v3|128|30|99999|350|
 |v5|128|30|1000000|350|
 |v6|256|20|1000000|256|
-|v7|128|30|10000000|350|
+|v7|128|30|1000000|350|
 
 Consider the loss graph below, grey one is `v0` and blue one is `v7`, you can see that larger buffer improves the training and also makes it smoother.
 
@@ -72,7 +73,7 @@ Consider the loss graph below, grey one is `v0` and blue one is `v7`, you can se
 ## Todo
 
 This is the task list:
-- [ ] Fix moves vocabulary and retrain
+- [x] Fix moves vocabulary and retrain
 - [ ] Perform Accuracy run on different models and log
 - [ ] Convert `IterableDataset` to `Dataset`
 - [ ] Integrate code with a web interface on [chessshhh](https://github.com/yashbonde/chessshhh)

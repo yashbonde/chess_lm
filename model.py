@@ -2,18 +2,17 @@
 
 import json
 import time
-import chess
 import random
 import numpy as np
-from tqdm import tqdm, trange
+from tqdm import trange
 
 import torch
 from torch import nn
 from torch.optim import Adam
 from torch.nn import functional as F
-from torch.utils.data import IterableDataset, DataLoader
+from torch.utils.data import IterableDataset, DataLoader, Dataset
 from torch.utils.tensorboard import SummaryWriter
-from transformers import GPT2Model, GPT2Config as ModelConfig
+from transformers import GPT2Model, GPT2Config
 
 ################################################
 ####### Model ##################################
@@ -134,21 +133,10 @@ class Trainer:
                 return _gs
 
             # now write wrapper for each epoch
-            best_loss = float("inf")
             gs = 1
             for e in range(config.max_epochs):
                 gs = run_epoch("train", gs)
                 self.save_checkpoint()
-#                 if self.test_dataset is not None:
-#                     test_loss = run_epoch("test", e)
-#                     print(f"Test loss: {test_loss}")
-                
-#                 # early stopping based on the test loss of just save always if no test set is provided
-#                 good_model = self.test_dataset is None or test_loss < best_loss
-#                 if self.config.ckpt_path is not None and good_model:
-#                     best_loss = test_loss
-#                     self.save_checkpoint()
-
 
 class TrainerConfig:
     max_epochs = 10
@@ -225,7 +213,7 @@ class ChessData(IterableDataset):
             results = [] # all the results
             for lm, game_res in zip(flm, fres):    
                 lm = list(map(lambda x: int(x.strip()), lm.split()))
-                lms.extend([self.GAME] + lm)
+                lms.extend([self.GAME] + lm[1:-1]) # ignore BOS + EOS tags, [GAME] does it for us
                 
                 # get the targets for values as [0,res,-res,res,-res...]
                 game_res = float(game_res)
@@ -257,6 +245,49 @@ class ChessData(IterableDataset):
                         yield out
                     del lms[:config.maxlen * batches]
                     del results[:config.maxlen * batches]
+
+
+class ChessDataInMemory(Dataset):
+    def __init__(self, config):
+        len_file = 0
+        with open(config.lm, "r") as f:
+            for _ in f:
+                len_file += 1
+        self.len = len_file
+
+        with open(config.m2id, "r") as m:
+            self.m2id = json.load(m)
+            if "[GAME]" not in self.m2id:  # only if not found
+                self.GAME = len(self.m2id)
+                self.m2id["[GAME]"] = self.GAME  # new game flag
+
+        self.id2m = {i: m for i,m in self.m2id.items()}
+        self.config = config
+
+        # now load the complete dataset in memory
+        with open(config.lm, "r") as flm, open(config.rf, "r") as fres:
+            lms = [] # all the sequences
+            results = [] # all the results
+            print("Loading the samples")
+            for _, lm, game_res in zip(trange(self.len), flm, fres):    
+                lm = list(map(lambda x: int(x.strip()), lm.split()))
+                lms.extend([self.GAME] + lm[1:-1]) # ignore BOS + EOS tags, [GAME] does it for us
+                
+                # get the targets for values as [0,res,-res,res,-res...]
+                game_res = float(game_res)
+                res = np.ones(len(lm)) * game_res
+                res[np.arange(1, len(lm), 2)] = -game_res
+                results.extend([0] + res.tolist()) # first will always generate 0
+
+        # now convert this long list to sequences
+        self.lms = np.asarray(ChessData._sliding_buckets(lms, config.maxlen))
+        self.results = np.asarray(ChessData._sliding_buckets(results, config.maxlen))
+
+    def __getitem__(self, index):
+        return {
+            "input_ids": torch.from_numpy(self.lms[index]).long(),
+            "value_targets": torch.from_numpy(self.results[index]).float()
+        }
 
 class DataConfig:
     lm = None
