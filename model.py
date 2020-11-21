@@ -199,8 +199,9 @@ class ChessData(IterableDataset):
 
         with open(config.m2id, "r") as m:
             self.m2id = json.load(m)
-            self.GAME = len(self.m2id)
-            self.m2id["[GAME]"] = self.GAME # new game flag
+            if "[GAME]" not in self.m2id: # only if not found
+                self.GAME = len(self.m2id)
+                self.m2id["[GAME]"] = self.GAME # new game flag
             
         self.id2m = {i:m for i,m in self.m2id.items()}
         self.config = config

@@ -1,48 +1,12 @@
-# Copyright 2018 The OpenAI Team Authors and HuggingFace Inc. team.
-# Yash Bonde
-# Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """Finetuning GPT2 to play chess
 @yashbonde-09.08.2020"""
 
-from collections import deque
 import os
-import json
-import time
-import numpy as np
-from tqdm import trange
 from argparse import ArgumentParser
-
-import torch
-from torch import nn
-from torch.utils import tensorboard as tb
-
-from torch.utils.data import DataLoader
 from model import DataConfig, ChessData, ModelConfig, BaseHFGPT, TrainerConfig, Trainer
-
-
 
 # load user args
 args = ArgumentParser(description="Train GPT2 model on t2sql corpus")
-args.add_argument(
-    "--train",
-    type=int,
-    choices=[0, 1],
-    help="Either to train the model from scratch (train) or finetune (fine)",
-    default = 1
-)
 
 # data args
 args.add_argument("--lmtrain", type=str, default = "agg_mv.txt", help="path to train_lm file")
@@ -84,14 +48,6 @@ dataConfig = DataConfig(
 )
 dstrain = ChessData(dataConfig)
 
-# dataConfig = DataConfig(
-#     lm=args.lmtest,
-#     m2id=args.m2id,
-#     maxlen=args.maxlen,
-#     buffer= args.buffer,
-# )
-# dstest = ChessData(dataConfig)
-
 modelConfig = ModelConfig(
     vocab_size = len(dstrain.m2id),
     n_positions=args.maxlen,
@@ -100,8 +56,8 @@ modelConfig = ModelConfig(
     n_layer=args.n_layer,
     n_head=args.n_head
 )
-print(modelConfig)
 model = BaseHFGPT(modelConfig)
+print(f"Model Size: {sum(dict((p.data_ptr(), p.numel()) for p in model.parameters()).values())}")
 
 trainerConf = TrainerConfig(
     max_epochs = args.num_epochs,
@@ -111,16 +67,4 @@ trainerConf = TrainerConfig(
     tb_path = model_folder
 )
 trainer = Trainer(model, dstrain, trainerConf)
-
-# if user is going to finetune an existing model
-if args.train == 0:
-    assert os.path.exists(model_path), f"Model not found on path: {model_path}"
-    print(f"🔋 Finetuning model at: {model_path}")
-    model.load_state_dict(torch.load(model_path))
-elif args.train == 1:
-    print(f"🔪 Training a new model")
-
-print(f"Model Size: {sum(dict((p.data_ptr(), p.numel()) for p in model.parameters()).values())}")
-
-# train
 trainer.train()
