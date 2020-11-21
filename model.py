@@ -71,7 +71,7 @@ class Trainer:
 
     def save_checkpoint(self, ckpt_path = None):
         raw_model = self.model.module if hasattr(self.model, "module") else self.model
-        print(f"Saving Model at {self.config.ckpt_path}")
+        print(f"Saving Model at {ckpt_path}")
         ckpt_path = ckpt_path if ckpt_path is not None else self.config.ckpt_path
         torch.save(raw_model.state_dict(), ckpt_path)
 

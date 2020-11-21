@@ -28,7 +28,7 @@ args.add_argument("--beta2", type = int, default = 0.95, help = "Adam.beta2")
 
 # train args
 args.add_argument("--batch_size", type=int, default=350, help="batch size")
-args.add_argument("--num_epochs", type=int, default=1, help="Number of epochs to train / finetune")
+args.add_argument("--num_epochs", type=int, default=3, help="Number of epochs to train / finetune")
 args.add_argument("--save_folder", type=str, default="models", help="Folder to save model to")
 args.add_argument("--model", type=str, default="cgpt", help="Saved model to have filepath `<model>.pt`")
 args.add_argument("--save_every", type=int, default=1000, help="save this global steps")

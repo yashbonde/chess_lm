@@ -65,6 +65,8 @@ I use 2x1080Ti configuration with 128 GB of RAM, `batch_size=350` seems to fill 
 |v5|128|30|1000000|350|
 |v6|256|20|1000000|256|
 |v7|128|30|1000000|350|
+|z0|128|30|1000000|350|
+|z2|128|30|Full|350|
 
 Consider the loss graph below, grey one is `v0` and blue one is `v7`, you can see that larger buffer improves the training and also makes it smoother.
 
@@ -73,12 +75,10 @@ Consider the loss graph below, grey one is `v0` and blue one is `v7`, you can se
 ## Todo
 
 This is the task list:
-- [x] Fix moves vocabulary and retrain
-- [ ] Perform Accuracy run on different models and log
-- [x] Convert `IterableDataset` to `Dataset`
-- [ ] Integrate code with a web interface on [chessshhh](https://github.com/yashbonde/chessshhh)
-- [ ] Add Simple MinMax Tree search
-- [ ] Add more complicated search algorithm MCTS
+- Perform Accuracy run on different models and log
+- Integrate code with a web interface on [chessshhh](https://github.com/yashbonde/chessshhh)
+- Add Simple MinMax Tree search
+- Add more complicated search algorithm MCTS
 
 ## Credits
 
