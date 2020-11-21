@@ -69,10 +69,11 @@ class Trainer:
             self.model = torch.nn.DataParallel(self.model).to(self.device)
             print("Model is now CUDA!")
 
-    def save_checkpoint(self):
+    def save_checkpoint(self, ckpt_path = None):
         raw_model = self.model.module if hasattr(self.model, "module") else self.model
         print(f"Saving Model at {self.config.ckpt_path}")
-        torch.save(raw_model.state_dict(), self.config.ckpt_path)
+        ckpt_path = ckpt_path if ckpt_path is not None else self.config.ckpt_path
+        torch.save(raw_model.state_dict(), ckpt_path)
 
     def train(self):
         model, config = self.model, self.config
@@ -90,13 +91,13 @@ class Trainer:
                 dl = DataLoader(
                     data,
                     pin_memory = True,
-                    batch_size = config.batch_size
+                    batch_size = config.batch_size,
+                    shuffle = data.shuffle
                 )
                 
                 num_batches = len(data) // config.batch_size + int(len(data) % config.batch_size != 0)
 
                 losses = []
-                # pbar = tqdm(enumerate(dl))
                 pbar = trange(num_batches, ncols = 100)
                 for it, d in zip(pbar, dl):
                     _l = -1 if not losses else losses[-1]
@@ -115,6 +116,12 @@ class Trainer:
                         loss_policy = loss[1].mean() # gather
                         loss_value = loss[2].mean() # gather
                         losses.append(loss_total.item())
+                        
+                    # save if required
+                    if _gs % config.save_every == 0:
+                        cp = config.ckpt_path.replace(".pt", f"_{_gs}.pt")
+                        self.save_checkpoint(cp)
+                    
 
                     if is_train:
                         # add things to tb, loss and attention images
@@ -126,6 +133,7 @@ class Trainer:
                         torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
                         optimizer.step()
                         _gs += 1
+                        
                 
                 if not is_train:
                     test_loss = float(np.mean(losses))
@@ -134,7 +142,7 @@ class Trainer:
                 return _gs
 
             # now write wrapper for each epoch
-            gs = 1
+            gs = 0
             for e in range(config.max_epochs):
                 gs = run_epoch("train", gs)
                 self.save_checkpoint()
@@ -146,6 +154,8 @@ class TrainerConfig:
     betas = (0.9, 0.95)
     grad_norm_clip = 1.0
     num_workers = 0 # for DataLoader
+    ckpt_path = None
+    tb_path = None
 
     def __init__(self, **kwargs):
         self.attrs = []
@@ -196,6 +206,7 @@ class ChessData(IterableDataset):
             
         self.id2m = {i:m for i,m in self.m2id.items()}
         self.config = config
+        self.shuffle = False
 
     def __len__(self):
         return self.len
@@ -294,6 +305,11 @@ class ChessDataInMemory(Dataset):
         
         self.lms = np.array(lms[:-(len(lms) % config.maxlen)]).reshape(-1, config.maxlen)
         self.results = np.array(results[:-(len(results) % config.maxlen)]).reshape(-1, config.maxlen)
+        
+        print(f"Moves: {self.lms.shape}; Results: {self.results.shape}")
+        
+        assert self.lms.shape == self.results.shape
+        self.shuffle = True
         
     def __len__(self):
         return self.lms.shape[0]

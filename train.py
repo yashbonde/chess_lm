@@ -31,6 +31,7 @@ args.add_argument("--batch_size", type=int, default=350, help="batch size")
 args.add_argument("--num_epochs", type=int, default=1, help="Number of epochs to train / finetune")
 args.add_argument("--save_folder", type=str, default="models", help="Folder to save model to")
 args.add_argument("--model", type=str, default="cgpt", help="Saved model to have filepath `<model>.pt`")
+args.add_argument("--save_every", type=int, default=1000, help="save this global steps")
 args = args.parse_args()
 
 # path and file management
@@ -67,7 +68,9 @@ trainerConf = TrainerConfig(
     batch_size = args.batch_size,
     lr = args.lr,
     betas = (args.beta1, args.beta2),
-    tb_path = model_folder
+    tb_path = model_folder,
+    save_every = args.save_every,
+    ckpt_path = model_path
 )
 trainer = Trainer(model, dstrain, trainerConf)
 trainer.train()
