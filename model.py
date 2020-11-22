@@ -14,6 +14,17 @@ from torch.utils.data import IterableDataset, DataLoader, Dataset
 from torch.utils.tensorboard import SummaryWriter
 from transformers import GPT2Model, GPT2Config as ModelConfig
 
+
+# ---- helper function ----- #
+def set_seed(seed):
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        
+
+
 ################################################
 ####### Model ##################################
 ################################################
@@ -25,18 +36,13 @@ class BaseHFGPT(nn.Module):
         self.config = config
         self.gpt = GPT2Model(config)
         self.policy_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
-#         self.value_head = nn.Sequential(
-#             nn.Linear(config.n_embd, config.n_embd // 2),
-#             nn.ReLU(),
-#             nn.Linear(config.n_embd // 2, 1),
-#         )
         self.value_head = nn.Linear(config.n_embd, 1)
 
     def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
         x = self.gpt(input_ids, return_dict = True, **gptkwargs)
         logits = self.policy_head(x.last_hidden_state)
         values = torch.tanh(self.value_head(x.last_hidden_state))
-        out = (logits, x)
+        out = (logits, values)
         if loss is not None and value_targets is not None:            
             # Categorical cross entropy loss worked best for policy
             logits = logits[:, :-1, :].contiguous().view(-1, logits.size(-1))
@@ -49,7 +55,7 @@ class BaseHFGPT(nn.Module):
 
             loss = loss_policy + loss_value
             
-            out = (logits, x, (loss, loss_policy, loss_value))
+            out = (logits, values, (loss, loss_policy, loss_value))
         return out
 
 ################################################
@@ -57,6 +63,7 @@ class BaseHFGPT(nn.Module):
 ################################################
 
 class Trainer:
+    # main training code
     def __init__(self, model, train_dataset, config, test_dataset = None):
         self.model = model
         self.train_dataset = train_dataset
@@ -174,14 +181,68 @@ class TrainerConfig:
                 "num_workers",
             ] + self.attrs))
         ]) + "\n"
+    
+    
 
-def set_seed(seed):
-    if seed is not None:
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
+class Evaluator():
+    # should be inside the main training code
+    def __init__(self, model, dataset, config):
+        self.model = model
+        self.model.eval()
+        self.dataset = dataset
+        self.config = config
 
+        self.device = "cpu"
+        if torch.cuda.is_available():
+            self.device = torch.cuda.current_device()
+            self.model = torch.nn.DataParallel(self.model).to(self.device)
+            print("Model is now CUDA!")
+            
+    def winner_acc(self, p, a):
+        corr = 0
+        p[p < -0.33] = -1.
+        p[-0.33 <= p <= 0.33] = 0.
+        p[p > 0.33] = 1.
+        corr += sum(p == a)
+        return corr
+
+    def move_acc(self, pred, act):
+        return sum(pred == act)
+
+    def eval(self):
+        model, config = self.model, self.config
+        data = self.dataset
+        dl = DataLoader(
+            data,
+            pin_memory = True,
+            batch_size = config.batch_size,
+        )
+
+        num_batches = len(data) // config.batch_size + int(len(data) % config.batch_size != 0)
+        pbar = trange(num_batches, ncols = 100)
+
+        acc_win, acc_pred, total = 0, 0, 0
+        for it, d in zip(pbar, dl):
+            d = {k:v.to(self.device) for k,v in d.items()}
+            out = model(**d)
+
+            policy, values = out
+            
+            policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
+            values = values[:,:-1,0].contiguous().view(-1)
+
+            acc_win += self.winner_acc(
+                values.detach().numpy(),
+                d["value_targets"][:, 1:].contiguous().view(-1).detach().numpy()
+            )
+            acc_pred += self.move_acc(
+                d["input_ids"][:, 1:].contiguous().view(-1),
+                torch.argmax(policy, dim = -1)
+            ).item()
+            
+            total += len(policy)
+            
+        return (acc_win, acc_pred, total)
 
 ################################################
 ####### Dataset ################################

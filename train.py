@@ -12,7 +12,7 @@ args = ArgumentParser(description="Train GPT2 model on t2sql corpus")
 args.add_argument("--lmtrain", type=str, default = "agg_mv.txt", help="path to train_lm file")
 args.add_argument("--lmtest", type=str, default = None, help="path to test_lm file")
 args.add_argument("--res", type=str, default = "agg_res.txt", help="path to res file")
-args.add_argument("--m2id", type=str, default = "m2id.json", help="path to move_to_id json")
+args.add_argument("--m2id", type=str, default = "moves.json", help="path to move_to_id json")
 
 args.add_argument("--maxlen", type = int, default = 60, help = "maximum length")
 
