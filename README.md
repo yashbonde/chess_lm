@@ -72,6 +72,13 @@ Consider the loss graph below, grey one is `v0` and blue one is `v7`, you can se
 
 <img src="assets/loss.png" height=400px>
 
+
+## Evaluation
+
+The way to evaluate the model is to
+- calculate the accrcay of prediction (both in the moves and in the winner predcition given a set of sequences)
+- play against it and see
+
 ## Todo
 
 This is the task list:

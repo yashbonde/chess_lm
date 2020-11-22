@@ -14,7 +14,6 @@ from torch.utils.data import IterableDataset, DataLoader, Dataset
 from torch.utils.tensorboard import SummaryWriter
 from transformers import GPT2Model, GPT2Config as ModelConfig
 
-
 # ---- helper function ----- #
 def set_seed(seed):
     if seed is not None:
@@ -22,13 +21,11 @@ def set_seed(seed):
         np.random.seed(seed)
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
-        
 
 
 ################################################
 ####### Model ##################################
 ################################################
-
 
 class BaseHFGPT(nn.Module):
     def __init__(self, config):
@@ -48,13 +45,12 @@ class BaseHFGPT(nn.Module):
             logits = logits[:, :-1, :].contiguous().view(-1, logits.size(-1))
             targets = input_ids[:, 1:].contiguous().view(-1)
             loss_policy = F.cross_entropy(logits, targets)
-            
+
             # MSE works best for value function
             loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
             loss_value = loss_value.mean()
 
             loss = loss_policy + loss_value
-            
             out = (logits, values, (loss, loss_policy, loss_value))
         return out
 
@@ -89,7 +85,7 @@ class Trainer:
             lr = config.learning_rate,
             betas = config.betas
         )
-        
+
         with SummaryWriter(log_dir=config.tb_path, flush_secs=20) as tb:
             def run_epoch(split, _gs = None):
                 is_train = split == "train"
@@ -101,7 +97,7 @@ class Trainer:
                     batch_size = config.batch_size,
                     shuffle = data.shuffle
                 )
-                
+
                 num_batches = len(data) // config.batch_size + int(len(data) % config.batch_size != 0)
 
                 losses = []
@@ -112,9 +108,8 @@ class Trainer:
                         pbar.set_description(f"[TRAIN] GS: {_gs}, IT: {it}, Loss: {round(_l, 5)}")
                     else:
                         pbar.set_description(f"[VAL] Epoch: {_gs}")
-                        
+
                     d = {k:v.to(self.device) for k,v in d.items()}
-                    
                     # print({k:v.size() for k,v in d.items()})
 
                     with torch.set_grad_enabled(is_train):
@@ -123,12 +118,11 @@ class Trainer:
                         loss_policy = loss[1].mean() # gather
                         loss_value = loss[2].mean() # gather
                         losses.append(loss_total.item())
-                        
+
                     # save if required
                     if _gs % config.save_every == 0:
                         cp = config.ckpt_path.replace(".pt", f"_{_gs}.pt")
                         self.save_checkpoint(cp)
-                    
 
                     if is_train:
                         # add things to tb, loss and attention images
@@ -140,7 +134,6 @@ class Trainer:
                         torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
                         optimizer.step()
                         _gs += 1
-                        
                 
                 if not is_train:
                     test_loss = float(np.mean(losses))
@@ -153,6 +146,7 @@ class Trainer:
             for e in range(config.max_epochs):
                 gs = run_epoch("train", gs)
                 self.save_checkpoint()
+
 
 class TrainerConfig:
     max_epochs = 10
@@ -181,28 +175,27 @@ class TrainerConfig:
                 "num_workers",
             ] + self.attrs))
         ]) + "\n"
-    
-    
+
 
 class Evaluator():
     # should be inside the main training code
-    def __init__(self, model, dataset, config):
+    def __init__(self, model, dataset, batch_size):
         self.model = model
         self.model.eval()
         self.dataset = dataset
-        self.config = config
+        self.batch_size = batch_size
 
         self.device = "cpu"
         if torch.cuda.is_available():
             self.device = torch.cuda.current_device()
             self.model = torch.nn.DataParallel(self.model).to(self.device)
             print("Model is now CUDA!")
-            
+
     def winner_acc(self, p, a):
         corr = 0
         p[p < -0.33] = -1.
-        p[-0.33 <= p <= 0.33] = 0.
         p[p > 0.33] = 1.
+        p[(p <= 0.33) & (p >=-0.33)] = 0. # numpy requires adding two boolean masks
         corr += sum(p == a)
         return corr
 
@@ -210,15 +203,15 @@ class Evaluator():
         return sum(pred == act)
 
     def eval(self):
-        model, config = self.model, self.config
+        model= self.model
         data = self.dataset
         dl = DataLoader(
             data,
             pin_memory = True,
-            batch_size = config.batch_size,
+            batch_size = self.batch_size,
         )
 
-        num_batches = len(data) // config.batch_size + int(len(data) % config.batch_size != 0)
+        num_batches = len(data) // self.batch_size + int(len(data) % self.batch_size != 0)
         pbar = trange(num_batches, ncols = 100)
 
         acc_win, acc_pred, total = 0, 0, 0
@@ -232,22 +225,21 @@ class Evaluator():
             values = values[:,:-1,0].contiguous().view(-1)
 
             acc_win += self.winner_acc(
-                values.detach().numpy(),
-                d["value_targets"][:, 1:].contiguous().view(-1).detach().numpy()
+                values.cpu().detach().numpy(),
+                d["value_targets"][:, 1:].contiguous().view(-1).cpu().detach().numpy()
             )
             acc_pred += self.move_acc(
                 d["input_ids"][:, 1:].contiguous().view(-1),
                 torch.argmax(policy, dim = -1)
             ).item()
-            
+
             total += len(policy)
-            
+
         return (acc_win, acc_pred, total)
 
 ################################################
 ####### Dataset ################################
 ################################################
-
 
 class ChessData(IterableDataset):
     def __init__(self, config):
@@ -264,7 +256,7 @@ class ChessData(IterableDataset):
                 self.m2id["[GAME]"] = self.GAME # new game flag
             else:
                 self.GAME = self.m2id["[GAME]"]
-            
+
         self.id2m = {i:m for i,m in self.m2id.items()}
         self.config = config
         self.shuffle = False
@@ -290,7 +282,7 @@ class ChessData(IterableDataset):
                 # ignore BOS + EOS tags, [GAME] does it for us
                 lm = list(map(lambda x: int(x.strip()), lm.split()))[1:-1]
                 lms.extend([self.GAME] + lm)
-                
+
                 # get the targets for values as [0,res,-res,res,-res...]
                 game_res = float(game_res)
                 res = np.ones(len(lm)) * game_res
@@ -351,7 +343,7 @@ class ChessDataInMemory(Dataset):
                 # ignore BOS + EOS tags, [GAME] does it for us
                 lm = list(map(lambda x: int(x.strip()), lm.split()))[1:-1]
                 lms.extend([self.GAME] + lm)
-                
+
                 # get the targets for values as [0,res,-res,res,-res...]
                 game_res = float(game_res)
                 res = np.ones(len(lm)) * game_res
@@ -363,15 +355,15 @@ class ChessDataInMemory(Dataset):
         # method, but for this will need to drop the last few tokens.
         # self.lms = np.asarray(ChessData._sliding_buckets(lms, config.maxlen))
         # self.results = np.asarray(ChessData._sliding_buckets(results, config.maxlen))
-        
+
         self.lms = np.array(lms[:-(len(lms) % config.maxlen)]).reshape(-1, config.maxlen)
         self.results = np.array(results[:-(len(results) % config.maxlen)]).reshape(-1, config.maxlen)
-        
+
         print(f"Moves: {self.lms.shape}; Results: {self.results.shape}")
-        
+
         assert self.lms.shape == self.results.shape
         self.shuffle = True
-        
+
     def __len__(self):
         return self.lms.shape[0]
 
