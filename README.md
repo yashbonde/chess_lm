@@ -4,6 +4,9 @@ Current neural chess engines like AlphaZero train a network based on self-play t
 
 Read [blog](https://yashbonde.github.io/blogs/chess-lm.html) for more information on the project.
 
+<!-- I cannot believe that people do [such](https://arxiv.org/pdf/2008.04057.pdf) garbage work and can get
+away with a paper. This is just sad man. -->
+
 ### Data
 
 To prepare your own data run the script `download.py` as follows:
