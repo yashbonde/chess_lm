@@ -41,7 +41,7 @@ class GameEngine():
             - K vs k
             - K & B vs k
             - K & N vs k
-            - K & BB vs k or vica-versa
+            - K & B vs k & b (Bb on same colour)
         - Mutual Agreement
 
         Read more: https://en.wikipedia.org/wiki/Glossary_of_chess
