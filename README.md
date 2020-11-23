@@ -64,16 +64,12 @@ I use 2x1080Ti configuration with 128 GB of RAM, `batch_size=350` seems to fill 
 |name|n_embd|n_layer|buffer_size|batch_size|
 |-|-|-|-|-|
 |v0|128|30|55555|350|
-|v3|128|30|99999|350|
-|v5|128|30|1000000|350|
 |v6|256|20|1000000|256|
-|v7|128|30|1000000|350|
-|z0|128|30|1000000|350|
-|z2|128|30|Full|350|
+|z5|128|30|Full|350|
 
-Consider the loss graph below, grey one is `v0` and blue one is `v7`, you can see that larger buffer improves the training and also makes it smoother.
+Consider the loss graph below, grey one is `v0`, red is `v6` and orange is `z5`. You can see that larger buffer improves the training as seen between `v0` and `v6`, both in overall loss and smoother loss curves. When compared with fully loaded dataset in `z5` the loss curve is more smoother while the training takes longer. It eventually does reach the lower loss value (epoch-end). Due to a bug in the `IterableDataset` number of samples was lower than fully loaded counterpart also seen is that a larger model gives only a slight edge over the smaller counterpart while parameters are ~3x.
 
-<img src="assets/loss.png" height=400px>
+<img src="assets/loss_f.png">
 
 
 ## Evaluation
