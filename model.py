@@ -181,7 +181,6 @@ class Evaluator():
     # should be inside the main training code
     def __init__(self, model, dataset, batch_size):
         self.model = model
-        self.model.eval()
         self.dataset = dataset
         self.batch_size = batch_size
 
@@ -192,11 +191,10 @@ class Evaluator():
             print("Model is now CUDA!")
 
     def winner_acc(self, p, a):
-        corr = 0
         p[p < -0.33] = -1.
         p[p > 0.33] = 1.
-        p[(p <= 0.33) & (p >=-0.33)] = 0. # numpy requires adding two boolean masks
-        corr += sum(p == a)
+        p[(p <= 0.33) & (p >=-0.33)] = 0.
+        corr = sum(p == a)
         return corr
 
     def move_acc(self, pred, act):
@@ -204,6 +202,7 @@ class Evaluator():
 
     def eval(self):
         model= self.model
+        model.eval()
         data = self.dataset
         dl = DataLoader(
             data,
@@ -232,7 +231,6 @@ class Evaluator():
                 d["input_ids"][:, 1:].contiguous().view(-1),
                 torch.argmax(policy, dim = -1)
             ).item()
-
             total += len(policy)
 
         return (acc_win, acc_pred, total)
