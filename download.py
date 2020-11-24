@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import json
+import wget
 import requests
 import chess
 from chess import pgn
@@ -74,7 +75,7 @@ def parse_and_save_data(files, save_after):
                 cntr += 1 # update main counter
                 result = cg.headers["Result"]
                 if result is not "*":
-                    seq = [m2id["[bos]"]] + [m2id[str(x.move)[:4]] for x in cg.mainline() if str(x.move)[:4] in m2id] + [m2id["[eos]"]]
+                    seq = [m2id[str(x.move)[:4]] for x in cg.mainline() if str(x.move)[:4] in m2id]
                     seqs.append(' '.join(list(map(str, seq))))
                     rseq.append(results[result])
 
@@ -114,20 +115,29 @@ if sys.argv[1] == "-d":
     # get the links and download using HTTP
     links = open('links.txt').readlines()
 
+    os.makedirs("data/", exists_ok = True)
+
     zippaths = []
     print(f"Downloading {len(links)} Zip Files ...")
     pbar = trange(len(links), ncols = 200)
     for i in pbar:
         l = links[i]
         pbar.set_description(f"Downloading {l}")
-        zp = './' + l.split('/')[-1].strip()
-        if os.path.exists(zp):
-            print(f"Skipping ... {l}")
-            continue
-        data = requests.get(l.strip())
+        # zp = './' + l.split('/')[-1].strip()
+        # if os.path.exists(zp):
+        #     print(f"Skipping ... {l}")
+        #     continue
+
+        # initially I used requests but after introducin FICS database which had
+        # some file > 3GB the requests would have shat the bed so now I am using
+        # wget
+        # data = requests.get(l.strip())
+        # with open(zp, "wb") as f:
+        #     f.write(data.content)
+
+        zp = wget.download(l.strip(), "data")
         zippaths.append(zp)
-        with open(zp, "wb") as f:
-            f.write(data.content)
+
 
     print("Extracting Zip Files ...")
     zipfiles = glob("*.zip")

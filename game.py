@@ -45,6 +45,7 @@ class GameEngine():
         - Mutual Agreement
 
         Read more: https://en.wikipedia.org/wiki/Glossary_of_chess
+        Read more: https://www.chess.com/article/view/how-chess-games-can-end-8-ways-explained
         """
         board = self.board
         board.push(move_id)
