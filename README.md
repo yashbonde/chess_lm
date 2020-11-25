@@ -7,12 +7,14 @@ Read [blog](https://yashbonde.github.io/blogs/chess-lm.html) for more informatio
 <!-- I cannot believe that people do [such](https://arxiv.org/pdf/2008.04057.pdf) garbage work and can get
 away with a paper. This is just sad man. -->
 
-
 ## Player
 
 The way to evaluate the model is to make it into a player and run it. To make a player do the following:
 ```python
 from game import GameEngine, Player
+
+with open("assets/moves.json") as f:
+    vocab_size = len(json.load(f))
 
 # config for model
 config = ModelConfig(vocab_size = vocab_size, n_positions=60, n_ctx=60, n_embd=128, n_layer=30, n_head=8)
@@ -53,12 +55,6 @@ Opening file: pgns/Sicilian2d6-4Qxd4.pgn: 100%|███████████
 Found 3167846 games, loaded 3166353 games (0.9995287018371474)
 ```
 
-There are few improvements to be done if you are interested:
-
-1. Introduce `multiprocessing` in the `download.py` to speed up the process, it was not needed in my case since I ran the code overnight on my laptop.
-2. Speed up downloads by using `FTP` scripts instead of `HTTP` used by `requests` package.
-3. Upload a new version of the agg.zip w/o the start and end tags
-
 Or skip this entire part and download the ZIP using the following command:
 
 ```
@@ -71,27 +67,10 @@ This will download a zip file and extract to different files `agg_mv.txt` and `a
 ### Training
 
 The if you have unzipped in same level as this repo then training is straightforward, run the command
-
 ```
 python train.py --model=<model-name>
 ```
-
-For baseline model I have following configurations:
-
-```python
-{
-  "n_embd": 128,
-  "n_head": 8,
-  "n_inner": None,
-  "n_layer": 30,
-  "n_positions": 60,
-  "beta1": 0.9,
-  "beta2": 0.95,
-  "lr": 0.0001,
-}
-```
-
-I use 2x1080Ti configuration with 128 GB of RAM, `batch_size=350` seems to fill just about both the GPUs.
+I use 2x1080Ti configuration with 128 GB of RAM, `batch_size=350` seems to fill just about both the GPUs. Model `z5` has the baseline config.
 
 ### Training Logs
 
@@ -114,12 +93,15 @@ Consider the loss graph below, grey one is `v0`, red is `v6` and orange is `z5`.
 This is the task list:
 
 - [x] Add `requirements.txt`
-- [ ] Fix README
+- [x] Fix README
 - [ ] Use `gdown` to download from google drive
 - [ ] Perform Accuracy run on different models and log (in progress)
   - Create a small subset of data for testing: create a conditional in `download.py` which runs like `python3 download.py -s 5` and creates a smaller file with top 5% of all the sequences in ZIP extract. Remember to do it for both the `agg_moves.txt` and `agg_res.txt`.
   - Write a python script to evaluate different models on this small subset, it takes in a txt file which has list of paths to different checkpoints. This is done because in the final version all the models will have to be evaluated automatically on the complete dataset and there should be no human in the loop.
 - [ ] Integrate code with a web interface on [chessshhh](https://github.com/yashbonde/chessshhh)
+  - ~~Make a neural player~~
+  - Make a playing script
+  - Port code for server
 - [ ] Add Simple MinMax Tree search
 - [ ] Add more complicated search algorithm MCTS
 
