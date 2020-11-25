@@ -197,7 +197,7 @@ elif sys.argv[1] == "-s":
     print(f"Total game count: {cntr}")
     top_k = int(cntr * size)
     print(f"Writing {top_k} samples")
-    with open("data/agg_mv.txt", "r") as f1, open(f"data/agg_mv_{size}%.txt", "r") as f2:
+    with open("data/agg_mv.txt", "r") as f1, open(f"data/agg_mv_{okay size}%.txt", "r") as f2:
         strings = []
         for i,l in enumerate(f):
             if i == cntr:
