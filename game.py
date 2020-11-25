@@ -109,10 +109,9 @@ class GameEngine():
 
 
 class Player():
-    def __init__(self, config, save_path, vocab_path, sample):
+    def __init__(self, config, save_path, vocab_path):
         model = BaseHFGPT(config)
         self.device = "cpu"
-        self.sample = sample
         self.tree = None  # callable tree method
 
         # Fixed: Load model in CPU
@@ -170,7 +169,7 @@ class Player():
                 lg_mask = lg_mask.cpu()
             lg_mask = lg_mask.detach().numpy().astype(np.float32)[legal_idx]
 
-            # add code for shuffling
+            # add code for sampling moves
             # lg_mask = lg_mask/lg_mask.sum(axis=0, keepdims=1)
             # lg_mask /= lg_mask.sum()
             # move = np.random.choice(legal, size = 1, p = lg_mask)

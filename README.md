@@ -7,6 +7,36 @@ Read [blog](https://yashbonde.github.io/blogs/chess-lm.html) for more informatio
 <!-- I cannot believe that people do [such](https://arxiv.org/pdf/2008.04057.pdf) garbage work and can get
 away with a paper. This is just sad man. -->
 
+
+## Player
+
+The way to evaluate the model is to make it into a player and run it. To make a player do the following:
+```python
+from game import GameEngine, Player
+
+# config for model
+config = ModelConfig(vocab_size = vocab_size, n_positions=60, n_ctx=60, n_embd=128, n_layer=30, n_head=8)
+
+# make two player
+player1 = Player(config, ".model_sample/z4_0.pt", "assets/moves.json")
+player2 = Player(config, ".model_sample/z4_0.pt", "assets/moves.json")
+
+# play
+mv = 0
+done = False
+p = 0
+while not done:
+    # model returns move object, value, confidence of move
+    if p == 0:
+        m,v,c = player1.move(game)
+        p += 1
+    else:
+        m,v,c = player2.move(game)
+        p = 0
+    done, res = game.step(m)
+    print(m,v,c)
+```
+
 ### Data
 
 To prepare your own data run the script `download.py` as follows:
@@ -78,13 +108,6 @@ Consider the loss graph below, grey one is `v0`, red is `v6` and orange is `z5`.
 <!-- |name|win_pred|acc_pred|
 |-|-|-|
 |z5_0.pt|0.0183%|0%| -->
-
-## Evaluation
-
-The way to evaluate the model is to
-
-- calculate the accrcay of prediction (both in the moves and in the winner predcition given a set of sequences)
-- play against it and see
 
 ## Todo
 
