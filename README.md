@@ -89,22 +89,16 @@ The way to evaluate the model is to
 ## Todo
 
 This is the task list:
-<<<<<<< HEAD
 
 - [ ] Add `requirements.txt`
 - [ ] Fix README
 - [ ] Use `gdown` to download from google drive
 - [ ] Perform Accuracy run on different models and log (in progress)
+  - Create a small subset of data for testing: create a conditional in `download.py` which runs like `python3 download.py -s 5` and creates a smaller file with top 5% of all the sequences in ZIP extract. Remember to do it for both the `agg_moves.txt` and `agg_res.txt`.
+  - Write a python script to evaluate different models on this small subset, it takes in a txt file which has list of paths to different checkpoints. This is done because in the final version all the models will have to be evaluated automatically on the complete dataset and there should be no human in the loop.
 - [ ] Integrate code with a web interface on [chessshhh](https://github.com/yashbonde/chessshhh)
 - [ ] Add Simple MinMax Tree search
 - [ ] Add more complicated search algorithm MCTS
-=======
-- Perform Accuracy run on different models and log
-  - Create a small subset of data for testing: create a conditional in `download.py` which runs like `python3 download.py -s 5` and creates a smaller file with top 5% of all the sequences in ZIP extract. Remember to do it for both the `agg_moves.txt` and `agg_res.txt`.
-  - Write a python script to evaluate different models on this small subset, it takes in a txt file which has list of paths to different checkpoints. This is done because in the final version all the models will have to be evaluated automatically on the complete dataset and there should be no human in the loop.
-- Add Simple MinMax Tree search
-- Add more complicated search algorithm MCTS
->>>>>>> 47581c6203bad568b5d6cf017b3ca22a39927a91
 
 ## Credits
 
