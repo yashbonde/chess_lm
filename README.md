@@ -10,6 +10,7 @@ away with a paper. This is just sad man. -->
 ### Data
 
 To prepare your own data run the script `download.py` as follows:
+
 ```
 # downloads the data from the list of links
 python3 download.py -d # will take 20-30 mins depending on internet speed
@@ -29,6 +30,7 @@ There are few improvements to be done if you are interested:
 3. Upload a new version of the agg.zip w/o the start and end tags
 
 Or skip this entire part and download the ZIP using the following command:
+
 ```
 wget --load-cookies /tmp/cookies.txt "https://docs.google.com/uc?export=download&confirm=$(wget --quiet --save-cookies /tmp/cookies.txt --keep-session-cookies --no-check-certificate 'https://docs.google.com/uc?export=download&id=1tdUgOB1VOnIT6opEJBzptp_rfUSEcbUZ' -O- | sed -rn 's/.*confirm=([0-9A-Za-z_]+).*/\1\n/p')&id=1tdUgOB1VOnIT6opEJBzptp_rfUSEcbUZ" -O agg.zip && rm -rf /tmp/cookies.txt
 unzip agg.zip
@@ -39,11 +41,13 @@ This will download a zip file and extract to different files `agg_mv.txt` and `a
 ### Training
 
 The if you have unzipped in same level as this repo then training is straightforward, run the command
+
 ```
 python train.py --model=<model-name>
 ```
 
 For baseline model I have following configurations:
+
 ```python
 {
   "n_embd": 128,
@@ -61,36 +65,38 @@ I use 2x1080Ti configuration with 128 GB of RAM, `batch_size=350` seems to fill 
 
 ### Training Logs
 
-|name|n_embd|n_layer|buffer_size|batch_size|
-|-|-|-|-|-|
-|v0|128|30|55555|350|
-|v6|256|20|1000000|256|
-|z5|128|30|Full|350|
+| name | n_embd | n_layer | buffer_size | batch_size |
+| ---- | ------ | ------- | ----------- | ---------- |
+| v0   | 128    | 30      | 55555       | 350        |
+| v6   | 256    | 20      | 1000000     | 256        |
+| z5   | 128    | 30      | Full        | 350        |
 
 Consider the loss graph below, grey one is `v0`, red is `v6` and orange is `z5`. You can see that larger buffer improves the training as seen between `v0` and `v6`, both in overall loss and smoother loss curves. When compared with fully loaded dataset in `z5` the loss curve is more smoother while the training takes longer. It eventually does reach the lower loss value (epoch-end). Due to a bug in the `IterableDataset` number of samples was lower than fully loaded counterpart also seen is that a larger model gives only a slight edge over the smaller counterpart while parameters are ~3x.
 
 <img src="assets/loss_f.png">
 
-
-
 <!-- |name|win_pred|acc_pred|
 |-|-|-|
 |z5_0.pt|0.0183%|0%| -->
 
-
 ## Evaluation
 
 The way to evaluate the model is to
+
 - calculate the accrcay of prediction (both in the moves and in the winner predcition given a set of sequences)
 - play against it and see
 
 ## Todo
 
 This is the task list:
-- Perform Accuracy run on different models and log (in progress)
-- Integrate code with a web interface on [chessshhh](https://github.com/yashbonde/chessshhh)
-- Add Simple MinMax Tree search
-- Add more complicated search algorithm MCTS
+
+- [ ] Add `requirements.txt`
+- [ ] Fix README
+- [ ] Use `gdown` to download from google drive
+- [ ] Perform Accuracy run on different models and log (in progress)
+- [ ] Integrate code with a web interface on [chessshhh](https://github.com/yashbonde/chessshhh)
+- [ ] Add Simple MinMax Tree search
+- [ ] Add more complicated search algorithm MCTS
 
 ## Credits
 
