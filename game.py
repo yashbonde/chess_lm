@@ -14,6 +14,8 @@ from model import BaseHFGPT
 # functional and generic. Most likely I will port this
 # over to my other repo
 ################################################
+
+
 class GameEngine():
     def __init__(self):
         self.board = chess.Board()  # initialise an empty board
@@ -52,7 +54,7 @@ class GameEngine():
         res = "game"
 
         # draw results
-        if board.is_stalemate(): # stalemate
+        if board.is_stalemate():  # stalemate
             print("Stalemate")
             self.done = True
             res = "draw"
@@ -61,7 +63,7 @@ class GameEngine():
             print("Threefold repetition claimed")
             self.done = True
             res = "draw"
-        
+
         elif board.can_claim_fifty_moves():
             print("Fifty Moves claimed")
             self.done = True
@@ -99,15 +101,18 @@ class GameEngine():
 ####### Player #################################
 ################################################
 
+
 class Player():
     def __init__(self, config, save_path, mcts=False):
         model = BaseHFGPT(config)
-        model.load_state_dict(torch.load(save_path))
-        model.eval()
-
+        self.device = "cpu"
         self.mcts = mcts  # to use mcts or not
 
-        self.device = "cpu"
+        # Fixed: Load model in CPU
+        model.load_state_dict(torch.load(
+            save_path, map_location=torch.device(self.device)))
+        model.eval()
+
         if torch.cuda.is_available():
             self.device = torch.cuda.current_device()
             self.model = torch.nn.DataParallel(self.model).to(self.device)
@@ -137,6 +142,7 @@ class RandomPlayer():
 
     def __repr__(self):
         return f"<Random Player {self.id}>"
+
 
 # test script
 if __name__ == "__main__":
@@ -172,4 +178,4 @@ if __name__ == "__main__":
             print("Thousand Line break")
             break
 
-
+    print(game)
