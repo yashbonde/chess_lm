@@ -1,11 +1,13 @@
 """
 for reference (not used anywhere): https://www.pettingzoo.ml/classic
 """
+import json
 import random
 import chess
 import torch
+import numpy as np
 import torch.nn.functional as F
-# from chess_lm.model import BaseHFGPT
+from model import BaseHFGPT
 
 ####### Engine #################################
 # Here I am writing a simple game engine that is NOT
@@ -27,6 +29,10 @@ class GameEngine():
     @property
     def fen(self):
         return self.board.fen()
+
+    @property
+    def legal_moves(self):
+        return self.board.legal_moves
 
     def step(self, move_id):
         """
@@ -103,22 +109,76 @@ class GameEngine():
 
 
 class Player():
-    def __init__(self, config, save_path, mcts=False):
+    def __init__(self, config, save_path, vocab_path, sample):
         model = BaseHFGPT(config)
         self.device = "cpu"
-        self.mcts = mcts  # to use mcts or not
+        self.sample = sample
+        self.tree = None  # callable tree method
 
         # Fixed: Load model in CPU
-        model.load_state_dict(torch.load(
-            save_path, map_location=torch.device(self.device)))
+        model.load_state_dict(torch.load(save_path, map_location=torch.device(self.device)))
         model.eval()
 
         if torch.cuda.is_available():
             self.device = torch.cuda.current_device()
             self.model = torch.nn.DataParallel(self.model).to(self.device)
+        else:
+            self.model = model
+
+        with open(vocab_path, "r") as f:
+            self.vocab = json.load(f)
+            self.inv_vocab = {v:k for k,v in self.vocab.items()}
 
     def __repr__(self):
-        return "<Player>"
+        return "<NeuraPlayer>"
+
+    def move(self, game):
+        # nn predicts the move and it's confidence on outcome (value?)
+        config = self.model.config
+        model = self.model
+
+        if self.tree is not None:
+            # self.tree: a tree callable object that takes in the model and board state
+            move = self.tree(model, game)
+
+        else:
+            b = game.board
+            # this is no search algorithm / greedy sampled search
+            moves = [0] + [self.vocab[str(x)] for x in b.move_stack]
+            moves = moves[:config.n_ctx]
+            moves = torch.Tensor(moves).view(1, len(moves)).long().to(self.device) # [1, N]
+
+            # print(moves)
+
+            legal = [x for x in b.legal_moves]
+            legal_idx = [self.vocab[str(x)] for x in b.legal_moves]
+            legal_mask = np.ones(config.vocab_size, dtype=np.float32) * 1e-6
+            legal_mask[legal_idx] = 0
+            legal_mask = torch.Tensor(legal_mask).to(self.device)  # [V]
+
+            # print(legal_mask, sum(legal_mask))
+
+            # pass to model
+            logits, values = model(input_ids=moves)
+            logits = logits[0, -1]  # [B,N,V] --> [V]
+            values = values[0, -1]  # [B,N,1] --> [1]
+            values = values.item()  # scalar
+
+            lg_mask = F.softmax(logits + legal_mask)  # softmax over legal moves
+
+            if self.device != "cpu":
+                lg_mask = lg_mask.cpu()
+            lg_mask = lg_mask.detach().numpy().astype(np.float32)[legal_idx]
+
+            # add code for shuffling
+            # lg_mask = lg_mask/lg_mask.sum(axis=0, keepdims=1)
+            # lg_mask /= lg_mask.sum()
+            # move = np.random.choice(legal, size = 1, p = lg_mask)
+            # print(lg_mask, sum(lg_mask))
+
+            move = legal[np.argmax(lg_mask)]
+            return move, values, np.max(lg_mask)
+
 
     def make_random_move(self, b):
         legal_moves = list(b.legal_moves)

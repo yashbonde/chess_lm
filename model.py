@@ -34,6 +34,12 @@ class BaseHFGPT(nn.Module):
         self.gpt = GPT2Model(config)
         self.policy_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
         self.value_head = nn.Linear(config.n_embd, 1)
+        self.n_params = sum(dict((p.data_ptr(), p.numel()) for p in self.parameters()).values())
+
+    @property
+    def num_parameters(self):
+        return self.n_params
+
 
     def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
         x = self.gpt(input_ids, return_dict = True, **gptkwargs)
