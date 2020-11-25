@@ -186,6 +186,28 @@ elif sys.argv[1] == "-p":
     res = time.strftime("%H:%M:%S", ty_res)
     print(f"Parsing completed in {res}")
 
+
+elif sys.argv[1] == "-s":
+    size = float(sys.argv[2]) # size percentage
+    with open("data/agg_mv.txt", "r") as f:
+        cntr = 0
+        for _ in f:
+            cntr += 1
+
+    print(f"Total game count: {cntr}")
+    top_k = int(cntr * size)
+    print(f"Writing {top_k} samples")
+    with open("data/agg_mv.txt", "r") as f1, open(f"data/agg_mv_{size}%.txt", "r") as f2:
+        strings = []
+        for i,l in enumerate(f):
+            if i == cntr:
+                break
+            strings.append(l)
+
+        print(f"Writing in file: {f"data/agg_mv_{size}%.txt"}")
+        f2.write("".join(strings))
+
+
 # ----------------------------------------------- #
 
 def get_all_moves():
