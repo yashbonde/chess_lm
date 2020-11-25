@@ -5,7 +5,7 @@ import random
 import chess
 import torch
 import torch.nn.functional as F
-from model import BaseHFGPT
+# from chess_lm.model import BaseHFGPT
 
 ####### Engine #################################
 # Here I am writing a simple game engine that is NOT
