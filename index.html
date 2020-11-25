@@ -1,0 +1,84 @@
+<html>
+    <head>
+        <title>Chessshhh Engine</title>
+        <!-- <link rel="stylesheet" type="text/css" href="assets/chessboard.min.css"> -->
+        <link rel="stylesheet" type="text/css" href="assets/page_assets/board.min.css">
+        <script src="assets/page_assets/jQuery-v3.4.1.min.js"></script>
+        <script src="assets/page_assets/chessboard.min.js"></script>
+        <script src="assets/page_assets/chess.min.js"></script>
+        <script src="assets/page_assets/cookies.js"></script>
+    </head>
+
+    <body style="font-size: 18px;">
+        <h3 style="text-align: center;">NeuraPlayer</h3>
+        <button onclick="newGame()" style="position: absolute;left: 48%;">New Game</button><br><br>
+        <div id="board" class="board"></div>
+        </div>
+
+<script type="text/javascript">
+// board visualization and games state handling starts here
+var onDragStart = function (source, piece, position, orientation) {
+    if (game.in_checkmate() === true || game.in_draw() === true || piece.search(/^b/) !== -1) {
+        return false;
+    }
+};
+
+function onDrop(source, target) {
+    var move = game.move({
+        from: source,
+        to: target,
+        promotion: 'q'
+    });
+    if (move == null) {
+        return 'snapback';
+    }
+
+    console.log('JSON.stringify({ from: source, target: target})', JSON.stringify({from: source, target: target }));
+
+    $.get(
+      'http://127.0.0.1:5000/move',
+      { from: source, target: target},
+      function (move_payload) {
+        // update the board state
+        if (move_payload.content != null) {
+          alert(move_payload.content);
+        }
+        console.log('move_payload>>>', move_payload)
+        board.position(position = move_payload.board_state, useAnimation = true);
+        game.move({
+          from: move_payload.from_square,
+          to: move_payload.to_square
+        })
+        console.log('game>>>', game);
+      }
+    )
+    
+};
+
+ function onSnapEnd () {
+    console.log('Done with onSnapEnd');
+};
+
+
+// function for new game
+function newGame() {
+    // reload the same page
+    document.location.reload()
+}
+
+
+// define the functions
+var game = new Chess()
+var board = ChessBoard('board', {
+    draggable: true,
+    position: 'start',
+    onDragStart,
+    onDrop,
+    onSnapEnd
+});
+
+</script>
+
+    </body>
+    
+</html>

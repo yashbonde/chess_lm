@@ -34,6 +34,9 @@ class GameEngine():
     def legal_moves(self):
         return self.board.legal_moves
 
+    def reset(self):
+        self.board.reset()
+
     def step(self, move_id):
         """
         Game is considered draw in the following cases:
