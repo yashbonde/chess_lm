@@ -90,7 +90,7 @@ The way to evaluate the model is to
 
 This is the task list:
 
-- [ ] Add `requirements.txt`
+- [x] Add `requirements.txt`
 - [ ] Fix README
 - [ ] Use `gdown` to download from google drive
 - [ ] Perform Accuracy run on different models and log (in progress)

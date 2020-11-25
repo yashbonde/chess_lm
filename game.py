@@ -177,3 +177,5 @@ if __name__ == "__main__":
         if mv == 1000:
             print("Thousand Line break")
             break
+
+    print(game)
