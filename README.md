@@ -71,12 +71,9 @@ Consider the loss graph below, grey one is `v0`, red is `v6` and orange is `z5`.
 
 <img src="assets/loss_f.png">
 
-
-
 <!-- |name|win_pred|acc_pred|
 |-|-|-|
 |z5_0.pt|0.0183%|0%| -->
-
 
 ## Evaluation
 
@@ -87,8 +84,9 @@ The way to evaluate the model is to
 ## Todo
 
 This is the task list:
-- Perform Accuracy run on different models and log (in progress)
-- Integrate code with a web interface on [chessshhh](https://github.com/yashbonde/chessshhh)
+- Perform Accuracy run on different models and log
+  - Create a small subset of data for testing: create a conditional in `download.py` which runs like `python3 download.py -s 5` and creates a smaller file with top 5% of all the sequences in ZIP extract. Remember to do it for both the `agg_moves.txt` and `agg_res.txt`.
+  - Write a python script to evaluate different models on this small subset, it takes in a txt file which has list of paths to different checkpoints. This is done because in the final version all the models will have to be evaluated automatically on the complete dataset and there should be no human in the loop.
 - Add Simple MinMax Tree search
 - Add more complicated search algorithm MCTS
 
