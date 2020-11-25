@@ -5,6 +5,7 @@ import re
 import sys
 import json
 import wget
+import time
 import requests
 import chess
 from chess import pgn
@@ -21,6 +22,12 @@ results = {
     "0-1": "-1",
     '1/2 1/2': "0"
 }
+
+def seconds_to_hours(s):
+    mins = s // 60
+    hrs = mins // 60
+    days = hrs // 24
+    return days, hrs, mins
 
 
 def load_game_count(files):
@@ -39,7 +46,7 @@ def load_game_count(files):
     return game_count
 
 
-def parse_and_save_data(files, save_after):
+def parse_and_save_data(files, save_after, pid):
     """parse the pgn files and save the data after `save_after` no. of games have been processed
     """
     seqs = []
@@ -83,7 +90,7 @@ def parse_and_save_data(files, save_after):
                 print(f"↗️ Can't open because: {e}")
 
             if cntr % save_after == 0:
-                with open(f"chess_lm_{fcntr}.txt", "w") as m, open(f"chess_res_{fcntr}.txt", "w") as r:
+                with open(f"chess_lm_{fcntr}_{pid}.txt", "w") as m, open(f"chess_res_{fcntr}_{pid}.txt", "w") as r:
                     print("Saving Files...")
                     m.write("\n".join(seqs))
                     r.write(" ".join(list(map(str, rseq))))
@@ -109,6 +116,12 @@ def parse_and_save_data(files, save_after):
     return game_count, game_count_loaded
 
 
+# def multiprocessing_parsing_wrapper(files, save_after):
+
+
+
+
+
 # ----------------------------------------------- #
 
 if sys.argv[1] == "-d":
@@ -116,6 +129,8 @@ if sys.argv[1] == "-d":
     links = open('links.txt').readlines()
 
     os.makedirs("data/", exists_ok = True)
+    
+    download_start_time = time.time()
 
     zippaths = []
     print(f"Downloading {len(links)} Zip Files ...")
@@ -138,9 +153,14 @@ if sys.argv[1] == "-d":
         zp = wget.download(l.strip(), "data")
         zippaths.append(zp)
 
+    # log the time taken
+    ty_res = time.gmtime(time.time() - download_start_time)
+    res = time.strftime("%H:%M:%S", ty_res)
+    print(f"Download completed in {res}")
 
     print("Extracting Zip Files ...")
-    zipfiles = glob("*.zip")
+    zip_start_time = time.time()
+    zipfiles = glob("data/*.zip")
     print(f"No. of zip files: {len(zipfiles)}")
     for i in trange(len(zipfiles)):
         f = zipfiles[i]
@@ -149,27 +169,22 @@ if sys.argv[1] == "-d":
         zf.close()
         os.remove(f)
 
+    ty_res = time.gmtime(time.time() - zip_start_time)
+    res = time.strftime("%H:%M:%S", ty_res)
+    print(f"Unzipping completed in {res}")
+
 # NOTE: that the meta information `game_count`, `game_count_loaded` was added after it was run
 # please use it on small file set before running on the complete system
 elif sys.argv[1] == "-p":
-    pgnfiles = glob('*.pgn')
+    parsing_start_time = time.time()
+    pgnfiles = glob('data/*.pgn')
     print(f"Found {len(pgnfiles)} files.")
     game_count, game_count_loaded = parse_and_save_data(pgnfiles, 100000) # n*~36MB files
-    print(f"Found {game_count} games, loaded {game_count_loaded} games ({game_count_loaded/game_count})")
-
-# this was done before the "-p" was modified, ignore if "-p" runs succesfully
-elif sys.argv[1] == "-v":
-    pgnfiles = glob('pgns/*.pgn')
-    print(f"Found {len(pgnfiles)} files.")
-    game_count = load_game_count(pgnfiles)
-
-    lm_files = glob('chess_lm*.txt')
-    game_count_loaded = 0
-    for f in lm_files:
-        with open(f, "r") as f2:
-            game_count_loaded += len(f2.readlines())
-
-    print(f"Found {game_count} games, loaded {game_count_loaded} games ({game_count_loaded/game_count})")
+    print(f"Found {game_count} games")
+    print(f"Loaded {game_count_loaded} ({game_count_loaded/game_count * 100}% coverage)")
+    ty_res = time.gmtime(time.time() - parsing_start_time)
+    res = time.strftime("%H:%M:%S", ty_res)
+    print(f"Parsing completed in {res}")
 
 # ----------------------------------------------- #
 
