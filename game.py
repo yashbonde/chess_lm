@@ -4,10 +4,11 @@ for reference (not used anywhere): https://www.pettingzoo.ml/classic
 import json
 import random
 import chess
+import chess.pgn
 import torch
 import numpy as np
 import torch.nn.functional as F
-from model import BaseHFGPT
+from model import BaseHFGPT, ModelConfig
 
 ####### Engine #################################
 # Here I am writing a simple game engine that is NOT
@@ -115,7 +116,8 @@ class Player():
         self.tree = None  # callable tree method
 
         # Fixed: Load model in CPU
-        model.load_state_dict(torch.load(save_path, map_location=torch.device(self.device)))
+        model.load_state_dict(torch.load(
+            save_path, map_location=torch.device(self.device)))
         model.eval()
 
         if torch.cuda.is_available():
@@ -126,7 +128,7 @@ class Player():
 
         with open(vocab_path, "r") as f:
             self.vocab = json.load(f)
-            self.inv_vocab = {v:k for k,v in self.vocab.items()}
+            self.inv_vocab = {v: k for k, v in self.vocab.items()}
 
     def __repr__(self):
         return "<NeuraPlayer>"
@@ -145,7 +147,8 @@ class Player():
             # this is no search algorithm / greedy sampled search
             moves = [0] + [self.vocab[str(x)] for x in b.move_stack]
             moves = moves[:config.n_ctx]
-            moves = torch.Tensor(moves).view(1, len(moves)).long().to(self.device) # [1, N]
+            moves = torch.Tensor(moves).view(
+                1, len(moves)).long().to(self.device)  # [1, N]
 
             # print(moves)
 
@@ -163,7 +166,8 @@ class Player():
             values = values[0, -1]  # [B,N,1] --> [1]
             values = values.item()  # scalar
 
-            lg_mask = F.softmax(logits + legal_mask)  # softmax over legal moves
+            # softmax over legal moves
+            lg_mask = F.softmax(logits + legal_mask)
 
             if self.device != "cpu":
                 lg_mask = lg_mask.cpu()
@@ -177,7 +181,6 @@ class Player():
 
             move = legal[np.argmax(lg_mask)]
             return move, values, np.max(lg_mask)
-
 
     def make_random_move(self, b):
         legal_moves = list(b.legal_moves)
@@ -205,36 +208,40 @@ class RandomPlayer():
 
 # test script
 if __name__ == "__main__":
+
+    with open("assets/moves.json") as f:
+        vocab_size = len(json.load(f))
+    config = ModelConfig(vocab_size=vocab_size, n_positions=60,
+                         n_ctx=60, n_embd=128, n_layer=30, n_head=8)
+
     game = GameEngine()
-    player1 = RandomPlayer(1)  # assume to be white
-    player2 = RandomPlayer(2)  # assume to be black
+    pgn_writer = chess.pgn.Game()
+    pgn_writer_node = pgn_writer
+    pgn_writer.headers["Event"] = "Test"
 
-    print(player1, player2)
-    print(game)
+    player1 = Player(config, ".model_sample/z4_0.pt",
+                     "assets/moves.json")  # assume to be white
+    player2 = Player(config, ".model_sample/z4_0.pt",
+                     "assets/moves.json")  # assume to be black
 
+    # play
     mv = 0
     done = False
     p = 0
     while not done:
+        # model returns move object, value, confidence of move
         if p == 0:
-            m = player1.move(game.board)
+            m, v, c = player1.move(game)
             p += 1
         else:
-            m = player2.move(game.board)
+            m, v, c = player2.move(game)
             p = 0
         done, res = game.step(m)
+        pgn_writer_node = pgn_writer_node.add_variation(m)
 
-        if res == "win":
-            p = f"Player{p+1} wins"
-        elif res == "draw":
-            p = f"{p} game draw"
-
-        print(f"==== {p} ====")
-        print(game.fen)
-
-        mv += 1
-        if mv == 1000:
-            print("Thousand Line break")
+        if res != "game":
+            print("Game over")
             break
 
-    print(game)
+        # print(m, v, c)
+    print(pgn_writer, file=open("latest_game.pgn", "w"), end="\n\n")

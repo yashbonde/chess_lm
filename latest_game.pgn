@@ -1,0 +1,10 @@
+[Event "Test"]
+[Site "?"]
+[Date "????.??.??"]
+[Round "?"]
+[White "?"]
+[Black "?"]
+[Result "*"]
+
+1. Nh3 h5 2. e3 g6 3. Bd3 f6 4. Bb5 e6 5. Nc3 Ke7 6. Rb1 f5 7. g3 f4 8. Ke2 Na6 9. Kd3 Nc5+ 10. Kd4 Rb8 11. Qg1 Na6 12. Nd1 fxe3 13. Nxe3 Ra8 14. Ke4 Nc5+ 15. Kd4 b6 16. b4 Na6 17. Qd1 Nf6 18. Rf1 Ne8 19. Bxd7 Bxd7 20. Nc4 Ba4+ 21. Ke5 Nc5 22. Re1 Bd7 23. Re2 b5 24. Re3 bxc4 25. Qg1 Nd6 26. Reb3 Ba4 27. Kd4 Nf7+ 28. Kxc5 Qd5# *
+
