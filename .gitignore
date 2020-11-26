@@ -129,3 +129,5 @@ lms/
 __MACOSX/
 agg_mv.txt
 agg_res.txt
+
+*.pgn
