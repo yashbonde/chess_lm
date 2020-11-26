@@ -136,6 +136,16 @@ class Player():
     def __repr__(self):
         return "<NeuraPlayer>"
 
+    def softmax(self, x):
+        x = (np.e ** x) / sum(np.e ** x)
+        # s = np.sum(x)
+        # print("\n", s - 1)
+        # if s - 1 < 0:
+        #     x[0] += 1 - s
+        # elif s - 1 > 0:
+        #     x[0] -= 1 - s
+        return x
+
     def move(self, game):
         # nn predicts the move and it's confidence on outcome (value?)
         config = self.model.config
@@ -148,7 +158,7 @@ class Player():
         else:
             b = game.board
             # this is no search algorithm / greedy sampled search
-            moves = [0] + [self.vocab[str(x)] for x in b.move_stack]
+            moves = [0] + [self.vocab[str(x)[:4]] for x in b.move_stack]
             moves = moves[:config.n_ctx]
             moves = torch.Tensor(moves).view(
                 1, len(moves)).long().to(self.device)  # [1, N]
@@ -156,10 +166,10 @@ class Player():
             # print(moves)
 
             legal = [x for x in b.legal_moves]
-            legal_idx = [self.vocab[str(x)] for x in b.legal_moves]
-            legal_mask = np.ones(config.vocab_size, dtype=np.float32) * 1e-6
-            legal_mask[legal_idx] = 0
-            legal_mask = torch.Tensor(legal_mask).to(self.device)  # [V]
+            legal_idx = [self.vocab[str(x)[:4]] for x in b.legal_moves]
+            # legal_mask = np.ones(config.vocab_size, dtype=np.float32) * 1e-6
+            # legal_mask[legal_idx] = 0
+            # legal_mask = torch.Tensor(legal_mask).to(self.device)  # [V]
 
             # print(legal_mask, sum(legal_mask))
 
@@ -170,11 +180,26 @@ class Player():
             values = values.item()  # scalar
 
             # softmax over legal moves
-            lg_mask = F.softmax(logits + legal_mask)
+            lg_mask = logits.detach().numpy()[legal_idx]
+            lg_mask = self.softmax(lg_mask)
+            # print(lg_mask)
 
-            if self.device != "cpu":
-                lg_mask = lg_mask.cpu()
-            lg_mask = lg_mask.detach().numpy().astype(np.float32)[legal_idx]
+            idx = np.random.multinomial(1, lg_mask,) # multinomial can take probabs that almost
+            # print(lg_mask.tolist(), np.argmax(idx))
+            # print(np.argmax(idx))
+
+            # if np.sum(lg_mask) != 1:
+            #     print("MMMM")
+            #     lg_mask /= np.sum(lg_mask)
+
+            # print(np.sum(lg_mask), np.sum(lg_mask) == 1)
+
+            # lg_mask = F.softmax(logits + legal_mask)
+
+            # if self.device != "cpu":
+            #     lg_mask = lg_mask.cpu()
+            # lg_mask = lg_mask.detach().numpy().astype(np.float32)[legal_idx]
+
 
             # add code for sampling moves
             # lg_mask = lg_mask/lg_mask.sum(axis=0, keepdims=1)
@@ -182,7 +207,8 @@ class Player():
             # move = np.random.choice(legal, size = 1, p = lg_mask)
             # print(lg_mask, sum(lg_mask))
 
-            move = legal[np.argmax(lg_mask)]
+            # move = legal[np.argmax(lg_mask)]
+            move = legal[np.argmax(idx)]
             return move, values, np.max(lg_mask)
 
     def make_random_move(self, b):
@@ -246,5 +272,5 @@ if __name__ == "__main__":
             print("Game over")
             break
 
-        # print(m, v, c)
+        print(m, v, c)
     print(pgn_writer, file=open("latest_game.pgn", "w"), end="\n\n")
