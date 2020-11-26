@@ -111,14 +111,61 @@ class GameEngine():
 ####### Tree ###################################
 ################################################
 
+class Node():
+    def __init__(self, value, move):
+        self.value = value
+        self.move = move
+        self.terminal = True
+        self.children = [] # initialise with a list
+
+    # def children(self):
+    #     return (self.)
+
+    def __repr__(self):
+        return f"<Node: move '{self.move[:4]}' ({self.value})>"
+
+
+def minimax(node, depth, maxp, minp, _max = False):
+    if not depth or node.is_terminal:
+        return node.value
+    
+    if _max:
+        val = -10000  # −∞
+        for child in node:
+            val = max(val, minimax(child, depth - 1, maxp, minp, False))
+    else:
+        val = +10000  # −∞
+        for child in node:
+            val = min(val, minimax(child, depth - 1, maxp, minp, True))
+    return val
+
+"""
+function minimax(node, depth, maximizingPlayer) is
+    if depth = 0 or node is a terminal node then
+        return the heuristic value of node
+    if maximizingPlayer then
+        value := −∞
+        for each child of node do
+            value := max(value, minimax(child, depth − 1, FALSE))
+        return value
+    else (* minimizing player *)
+        value := +∞
+        for each child of node do
+            value := min(value, minimax(child, depth − 1, TRUE))
+        return value
+"""
+
 
 ################################################
 ####### Player #################################
 ################################################
 
 class Player():
-    def __init__(self, vocab_path):
+    def __init__(self, config, save_path, vocab_path):
         self.tree = None  # callable tree method
+
+        self.config = config
+        self.save_path = save_path
         
         with open(vocab_path, "r") as f:
             self.vocab = json.load(f)
@@ -128,15 +175,18 @@ class Player():
         self.elo = 1000
         self.idx = None
 
+
+        self.load()
+
     def __repr__(self):
         return "<NeuraPlayer>"
 
-    def load(self, config, save_path):
+    def load(self):
         self.device = "cpu"
-        model = BaseHFGPT(config)
+        model = BaseHFGPT(self.config)
 
         # Fixed: Load model in CPU
-        model.load_state_dict(torch.load(save_path, map_location=torch.device(self.device)))
+        model.load_state_dict(torch.load(self.save_path, map_location=torch.device(self.device)))
         model.eval()
 
         if torch.cuda.is_available():
@@ -148,9 +198,10 @@ class Player():
     def flush():
         pass
 
-
-    def softmax(self, x):
-        return (np.e ** x) / sum(np.e ** x)
+    def softmax(self, x, dim= -1):
+        n = np.e ** x
+        d = np.sum(np.e ** x, axis=dim)
+        return (n.T / d).T  # col gets divided instead of row so double transpose
 
     def better_choice(self, a, p, n):
         # make better choices man!
@@ -214,9 +265,11 @@ class Player():
             lg_mask = self.softmax(lg_mask)
             move = self.better_choice(legal, lg_mask, 1)[0]
 
-        # saturate means draw
+            # force promote to queen
+            if not str(move)[-1].isdigit():
+                move = chess.Move.from_uci(str(move)[:4] + "q")
 
-        return move, values, np.max(lg_mask)
+            return move, values, np.max(lg_mask)
 
     def make_random_move(self, b):
         legal_moves = list(b.legal_moves)
@@ -257,7 +310,7 @@ if __name__ == "__main__":
 
     player1 = Player(config, ".model_sample/z4_0.pt",
                      "assets/moves.json")  # assume to be white
-    player2 = Player(config, ".model_sample/z4_0.pt",
+    player2 = Player(config, "models/z5/z5_6000.pt",
                      "assets/moves.json")  # assume to be black
 
     # play
@@ -269,15 +322,14 @@ if __name__ == "__main__":
         if p == 0:
             m, v, c = player1.move(game)
             p += 1
+            mv += 1
         else:
             m, v, c = player2.move(game)
             p = 0
+        print(mv, "|", m, v, c)
         done, res = game.step(m)
         pgn_writer_node = pgn_writer_node.add_variation(m)
-
-        if res != "game":
+        if res != "game" or mv == 40:
             print("Game over")
             break
-
-        print(m, v, c)
     print(pgn_writer, file=open("latest_game.pgn", "w"), end="\n\n")
