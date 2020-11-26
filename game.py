@@ -108,19 +108,35 @@ class GameEngine():
         return self.done, res
 
 ################################################
-####### Player #################################
+####### Tree ###################################
 ################################################
 
 
+################################################
+####### Player #################################
+################################################
+
 class Player():
-    def __init__(self, config, save_path, vocab_path):
-        model = BaseHFGPT(config)
-        self.device = "cpu"
+    def __init__(self, vocab_path):
         self.tree = None  # callable tree method
+        
+        with open(vocab_path, "r") as f:
+            self.vocab = json.load(f)
+            self.inv_vocab = {v: k for k, v in self.vocab.items()}
+
+        # participant code
+        self.elo = 1000
+        self.idx = None
+
+    def __repr__(self):
+        return "<NeuraPlayer>"
+
+    def load(self, config, save_path):
+        self.device = "cpu"
+        model = BaseHFGPT(config)
 
         # Fixed: Load model in CPU
-        model.load_state_dict(torch.load(
-            save_path, map_location=torch.device(self.device)))
+        model.load_state_dict(torch.load(save_path, map_location=torch.device(self.device)))
         model.eval()
 
         if torch.cuda.is_available():
@@ -129,22 +145,44 @@ class Player():
         else:
             self.model = model
 
-        with open(vocab_path, "r") as f:
-            self.vocab = json.load(f)
-            self.inv_vocab = {v: k for k, v in self.vocab.items()}
+    def flush():
+        pass
 
-    def __repr__(self):
-        return "<NeuraPlayer>"
 
     def softmax(self, x):
-        x = (np.e ** x) / sum(np.e ** x)
-        # s = np.sum(x)
-        # print("\n", s - 1)
-        # if s - 1 < 0:
-        #     x[0] += 1 - s
-        # elif s - 1 > 0:
-        #     x[0] -= 1 - s
-        return x
+        return (np.e ** x) / sum(np.e ** x)
+
+    def better_choice(self, a, p, n):
+        # make better choices man!
+
+        # the default np.random.choice has problems when sum(p) != 1
+        # which is often the case when normalising using softmax above
+        # this code is hacked from the numpy code
+        # https://github.com/numpy/numpy/blob/maintenance/1.9.x/numpy/random/mtrand/mtrand.pyx#L1066
+
+        # by default replace = False, we want only unique values
+        # and size = 1 only want one sample at a time
+        a = np.array(a, copy = False)
+        p = p.copy()
+        found = np.zeros([n], dtype = np.int)
+        m = 0 # how many found
+        while m < n:
+            x = np.random.rand(n - m)
+            if m > 0:
+                p[found[0:m]] = 0
+            
+            cdf = np.cumsum(p)
+            cdf /= cdf[-1]
+            cdf[-1] = min(cdf[-1], 1.)
+            new = cdf.searchsorted(x, side = 'right')
+            _, unique_indices = np.unique(new, return_index = True)
+            unique_indices.sort()
+            new  = new.take(unique_indices)
+            found[m:m+new.size] = new
+            
+            m += new.size
+
+        return a[found]
 
     def move(self, game):
         # nn predicts the move and it's confidence on outcome (value?)
@@ -160,18 +198,10 @@ class Player():
             # this is no search algorithm / greedy sampled search
             moves = [0] + [self.vocab[str(x)[:4]] for x in b.move_stack]
             moves = moves[:config.n_ctx]
-            moves = torch.Tensor(moves).view(
-                1, len(moves)).long().to(self.device)  # [1, N]
-
-            # print(moves)
+            moves = torch.Tensor(moves).view(1, len(moves)).long().to(self.device)  # [1, N]
 
             legal = [x for x in b.legal_moves]
             legal_idx = [self.vocab[str(x)[:4]] for x in b.legal_moves]
-            # legal_mask = np.ones(config.vocab_size, dtype=np.float32) * 1e-6
-            # legal_mask[legal_idx] = 0
-            # legal_mask = torch.Tensor(legal_mask).to(self.device)  # [V]
-
-            # print(legal_mask, sum(legal_mask))
 
             # pass to model
             logits, values = model(input_ids=moves)
@@ -182,34 +212,11 @@ class Player():
             # softmax over legal moves
             lg_mask = logits.detach().numpy()[legal_idx]
             lg_mask = self.softmax(lg_mask)
-            # print(lg_mask)
+            move = self.better_choice(legal, lg_mask, 1)[0]
 
-            idx = np.random.multinomial(1, lg_mask,) # multinomial can take probabs that almost
-            # print(lg_mask.tolist(), np.argmax(idx))
-            # print(np.argmax(idx))
+        # saturate means draw
 
-            # if np.sum(lg_mask) != 1:
-            #     print("MMMM")
-            #     lg_mask /= np.sum(lg_mask)
-
-            # print(np.sum(lg_mask), np.sum(lg_mask) == 1)
-
-            # lg_mask = F.softmax(logits + legal_mask)
-
-            # if self.device != "cpu":
-            #     lg_mask = lg_mask.cpu()
-            # lg_mask = lg_mask.detach().numpy().astype(np.float32)[legal_idx]
-
-
-            # add code for sampling moves
-            # lg_mask = lg_mask/lg_mask.sum(axis=0, keepdims=1)
-            # lg_mask /= lg_mask.sum()
-            # move = np.random.choice(legal, size = 1, p = lg_mask)
-            # print(lg_mask, sum(lg_mask))
-
-            # move = legal[np.argmax(lg_mask)]
-            move = legal[np.argmax(idx)]
-            return move, values, np.max(lg_mask)
+        return move, values, np.max(lg_mask)
 
     def make_random_move(self, b):
         legal_moves = list(b.legal_moves)

@@ -75,6 +75,6 @@ def make_move():
 def new_game():
     return render_template("index.html")
 
-
+# --mode=sf/neura
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, debug=True)
