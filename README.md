@@ -7,6 +7,11 @@ Read [blog](https://yashbonde.github.io/blogs/chess-lm.html) for more informatio
 <!-- I cannot believe that people do [such](https://arxiv.org/pdf/2008.04057.pdf) garbage work and can get
 away with a paper. This is just sad man. -->
 
+Now added is the code to server and a simple webapge to play in:
+```
+python3 play.py # goto http://0.0.0.0:5000/ in browser
+```
+
 ## Player
 
 The way to evaluate the model is to make it into a player and run it. To make a player do the following:
@@ -22,6 +27,9 @@ config = ModelConfig(vocab_size = vocab_size, n_positions=60, n_ctx=60, n_embd=1
 # make two player
 player1 = Player(config, ".model_sample/z4_0.pt", "assets/moves.json")
 player2 = Player(config, ".model_sample/z4_0.pt", "assets/moves.json")
+
+# define game engine
+game = GameEngine()
 
 # play
 mv = 0
@@ -100,8 +108,10 @@ This is the task list:
   - Write a python script to evaluate different models on this small subset, it takes in a txt file which has list of paths to different checkpoints. This is done because in the final version all the models will have to be evaluated automatically on the complete dataset and there should be no human in the loop.
 - [ ] Integrate code with a web interface on [chessshhh](https://github.com/yashbonde/chessshhh)
   - ~~Make a neural player~~
-  - Make a playing script
+  - Make a playing script (webapp >>> GUI)
   - Port code for server
+    - There's this CORS shit for API and static file code is not being read correctly. Someone else has to fix those.
+- [ ] 
 - [ ] Add Simple MinMax Tree search
 - [ ] Add more complicated search algorithm MCTS
 

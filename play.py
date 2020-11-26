@@ -5,8 +5,8 @@ import os
 import uuid
 import random
 import logging
-from flask import request, make_response
-from flask import Flask, jsonify
+from glob import glob
+from flask import request, make_response, render_template, Flask, jsonify, url_for
 
 from game import Player, GameEngine
 
@@ -14,8 +14,7 @@ from game import Player, GameEngine
 app = Flask(__name__)
 
 game = GameEngine()
-print("INIT GAME:", game)
-# neuraPlayer = Player()
+print("INIT GAME:\n", game)
 
 @app.route('/move', methods = ["POST"])
 def make_move():
@@ -70,6 +69,11 @@ def make_move():
     response.headers["Access-Control-Allow-Origin"] = "*"
     print(response)
     return response
+
+
+@app.route("/")
+def new_game():
+    return render_template("index.html")
 
 
 if __name__ == "__main__":

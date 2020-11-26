@@ -1,12 +1,13 @@
 <html>
     <head>
+        <meta charset="utf-8">
+        <meta http="X-UA-Compatible" content="IE=edge">
         <title>Chessshhh Engine</title>
-        <!-- <link rel="stylesheet" type="text/css" href="assets/chessboard.min.css"> -->
-        <link rel="stylesheet" type="text/css" href="assets/page_assets/board.min.css">
-        <script src="assets/page_assets/jQuery-v3.4.1.min.js"></script>
-        <script src="assets/page_assets/chessboard.min.js"></script>
-        <script src="assets/page_assets/chess.min.js"></script>
-        <script src="assets/page_assets/cookies.js"></script>
+        
+        <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='board.min.cs') }}s">
+        <script src="{{ url_for('static', filename='jQuery-v3.4.1.min.js') }}"></script>
+        <script src="{{ url_for('static', filename='chessboard.min.js') }}"></script>
+        <script src="{{ url_for('static', filename='chess.min.js') }}"></script>
     </head>
 
     <body style="font-size: 18px;">
@@ -35,10 +36,10 @@ function onDrop(source, target) {
 
     console.log('JSON.stringify({ from: source, target: target})', JSON.stringify({from: source, target: target }));
 
-    $.get(
-      'http://127.0.0.1:5000/move',
-      { from: source, target: target},
-      function (move_payload) {
+    $.ajax({
+      url: 'http://127.0.0.1:5000/move',
+      data: { from: source, target: target},
+      onsuccess: function (move_payload) {
         // update the board state
         if (move_payload.content != null) {
           alert(move_payload.content);
@@ -51,7 +52,7 @@ function onDrop(source, target) {
         })
         console.log('game>>>', game);
       }
-    )
+    })
     
 };
 

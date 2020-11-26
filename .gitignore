@@ -4,7 +4,6 @@
 .DS_Store
 .vscode
 *.prof
-templates
 
 # venv files
 bin/
