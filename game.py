@@ -100,32 +100,85 @@ class GameEngine():
             self.done = True
             res = "win"
 
-        # this is generic and does not tell the result
-        # elif board.is_game_over():
-        #     print("Game Over")
-        #     self.done = True
-        #     res = "draw"
         return self.done, res
 
 ################################################
 ####### Tree ###################################
 ################################################
 
+def softmax(x, dim= -1):
+        n = np.e ** x
+        d = np.sum(np.e ** x, axis=dim)
+        return (n.T / d).T  # col gets divided instead of row so double transpose
+
 class Node():
     def __init__(self, value, move):
         self.value = value
         self.move = move
-        self.terminal = True
         self.children = [] # initialise with a list
-
-    # def children(self):
-    #     return (self.)
+        
+    @property
+    def terminal(self):
+        return len(self.childen) > 0
+    
+    def __eq__(self, n):
+        return self.move == n.move
+    
+    def __len__(self):
+        return len(self.children)
 
     def __repr__(self):
-        return f"<Node: move '{self.move[:4]}' ({self.value})>"
+        return f"<Node: move '{self.move[:4]}' ({self.value:.3f})>"
+
+def add_one(model, b, root_node, future_moves, vocab, inv_vocab, flip = True, k = 10):
+    # adds one depth of all the predictions to root_node.children
+    legal_moves = [vocab[str(x)[:4]] for x in b.legal_moves] # covert to ints for indexing
+    mv_batched = [[vocab[str(x)[:4]] for x in b.move_stack] + [l] for l in future_moves] # convert to ints
+    mv_batched = torch.Tensor(mv_batched).long()
+    logits, val_searched = model(input_ids = mv_batched)
+    flip = -1 if True else flip
+    for l,v in zip(future_moves, val_searched[:, -1].view(-1).tolist()):
+        root_node.children.append(Node(flip * v, inv_vocab[l]))
+        
+    # now get the top_k moves for all legal moves
+    logits = logits[:, -1, legal_moves].detach().numpy() # [N, m]
+    log_probs= softmax(logits)  # [N, 1793]
+    top_prob_mvids = np.argsort(log_probs, axis = 1)[:, ::-1][:, :k] # [N, k]
+    
+    return top_prob_mvids, legal_moves
+
+
+def generate_tree(model, root_node, b, future_moves, vocab, inv_vocab, k = 5):
+    """generates a tree by iterating over top policies (breadth) by the model upto
+    a specified depth"""
+
+    # do the first search
+    top_prob_mvids, legal_moves = add_one(model, b, root_node, future_moves, vocab, inv_vocab, flip = True, k = k)
+    top_prob_mvids_strs = [[inv_vocab[legal_moves[i]] for i in tk] for tk in top_prob_mvids] # convert to strings
+
+    for i, child in enumerate(root_node.children):
+        # for each child move make a copy of the board add a move and get one depth
+        bcopy = b.copy()
+        bcopy.push(chess.Move.from_uci(child.move))
+        top_prob_mvids_child, lm_child = add_one(model, bcopy, child, future_moves = top_prob_mvids[i], flip = False, k = k)
 
 
 def minimax(node, depth, maxp, minp, _max = False):
+    """
+    function minimax(node, depth, maximizingPlayer) is
+        if depth = 0 or node is a terminal node then
+            return the heuristic value of node
+        if maximizingPlayer then
+            value := −∞
+            for each child of node do
+                value := max(value, minimax(child, depth − 1, FALSE))
+            return value
+        else (* minimizing player *)
+            value := +∞
+            for each child of node do
+                value := min(value, minimax(child, depth − 1, TRUE))
+            return value
+    """
     if not depth or node.is_terminal:
         return node.value
     
@@ -138,22 +191,6 @@ def minimax(node, depth, maxp, minp, _max = False):
         for child in node:
             val = min(val, minimax(child, depth - 1, maxp, minp, True))
     return val
-
-"""
-function minimax(node, depth, maximizingPlayer) is
-    if depth = 0 or node is a terminal node then
-        return the heuristic value of node
-    if maximizingPlayer then
-        value := −∞
-        for each child of node do
-            value := max(value, minimax(child, depth − 1, FALSE))
-        return value
-    else (* minimizing player *)
-        value := +∞
-        for each child of node do
-            value := min(value, minimax(child, depth − 1, TRUE))
-        return value
-"""
 
 
 ################################################
@@ -197,11 +234,6 @@ class Player():
 
     def flush():
         pass
-
-    def softmax(self, x, dim= -1):
-        n = np.e ** x
-        d = np.sum(np.e ** x, axis=dim)
-        return (n.T / d).T  # col gets divided instead of row so double transpose
 
     def better_choice(self, a, p, n):
         # make better choices man!
@@ -262,7 +294,7 @@ class Player():
 
             # softmax over legal moves
             lg_mask = logits.detach().numpy()[legal_idx]
-            lg_mask = self.softmax(lg_mask)
+            lg_mask = softmax(lg_mask)
             move = self.better_choice(legal, lg_mask, 1)[0]
 
             # force promote to queen
