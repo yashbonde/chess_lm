@@ -5,18 +5,18 @@ torch is only used for neural network, the output values are converted to numpy
 and all the operations are then used for 
 """
 import json
-import random
 import chess
 import chess.pgn
 import torch
 import numpy as np
+from time import time
 import torch.nn.functional as F
 from model import BaseHFGPT, ModelConfig
 
 
 def Move(x):
     # get chess.Move object and force promote to queen
-    if x[-1].isdigit():
+    if not x[-1].isdigit():
         x = x[:-1] + "q"
     return chess.Move.from_uci(x)
 
@@ -119,10 +119,17 @@ def softmax(x, dim=-1):
 
 
 def top_p(x, p = 0.98):
+    # https://arxiv.org/pdf/1904.09751.pdf, using this method reduces the repetitions
+    # In practice this means selecting the highest probability tokens whose cumulative probability
+    # mass exceeds the pre-chosen threshold p. The size of the sampling set will adjust dynamically
+    # based on the shape of the probability distribution at each time step. For high values of p,
+    # this is a small subset of vocabulary that takes up vast majority of the probability mass —
+    # the nucleus.
     x_sorted = np.sort(x, axis = -1)[:, ::-1]
     x_sorted_idx = np.argsort(x, axis = -1)[:, ::-1]
     cdf = np.cumsum(x_sorted, axis = -1)
     cdf_mask = np.greater(cdf, p)
+    
     # need to do list comprehension because there can be a shape mismatch
     cdf_idx = [[x_sorted_idx[i,j] for j,f in enumerate(mask) if f] for i,mask in enumerate(cdf_mask)]
     return cdf_idx
@@ -140,6 +147,13 @@ class Node():
     @property
     def terminal(self):
         return len(self.children) == 0
+
+    @property
+    def total_nodes(self):
+        n = 1
+        for c in self.children:
+            n += c.total_nodes
+        return n
 
     def __eq__(self, n):
         return self.move == n.move
@@ -222,11 +236,11 @@ def generate_tree(model, depth, board, root_node, vocab, inv_vocab, mv_ids = Non
             bchild.push(Move(child.move))
             generate_tree(
                 model = model, depth = depth - 1, board = bchild, root_node = child, 
-                mv_ids = mv_ids, verbose = verbose
+                mv_ids=mv_ids, verbose=verbose, vocab=vocab, inv_vocab=inv_vocab
             )
 
 
-def minimax(node, depth, maxp, minp, _max = False):
+def minimax(node, depth, _max = False):
     """
     function minimax(node, depth, maximizingPlayer) is
         if depth = 0 or node is a terminal node then
@@ -242,17 +256,20 @@ def minimax(node, depth, maxp, minp, _max = False):
                 value := min(value, minimax(child, depth − 1, TRUE))
             return value
     """
-    if not depth or node.is_terminal:
+    # print(node.s, _max, depth)
+    if not depth or node.terminal:
         return node.value
     
     if _max:
+        # print()
         val = -10000  # −∞
-        for child in node:
-            val = max(val, minimax(child, depth - 1, maxp, minp, False))
+        for child in node.children:
+            val = max(val, minimax(child, depth - 1, False))
     else:
+        # print()
         val = +10000  # −∞
-        for child in node:
-            val = min(val, minimax(child, depth - 1, maxp, minp, True))
+        for child in node.children:
+            val = min(val, minimax(child, depth - 1, True))
     return val
 
 
@@ -262,7 +279,7 @@ def minimax(node, depth, maxp, minp, _max = False):
 
 class Player():
     def __init__(self, config, save_path, vocab_path, search = "sample"):
-        if search not in ["sample", "random", "minimax"]:
+        if search not in ["sample", "greedy", "random", "minimax"]:
             raise ValueError(f"Searching method: {search} not defined")
 
         self.search = search  # method used to determine the move
@@ -364,32 +381,23 @@ class Player():
             lg_mask = softmax(lg_mask)
 
         if self.search == "minimax": # use a minimax method to determine the best possible move
+            mv = '[GAME]' if not b.move_stack else str(b.move_stack[-1])[:4] # new game handle
+            root_node = Node(value = value, move = mv)
 
+            # generate tree for this node
+            _st = time()
+            print("\nStarting tree generation ...", end = " ")
+            generate_tree(model=model, depth=2, board=b, root_node=root_node, vocab=vocab, inv_vocab=inv_vocab, verbose = False)
+            print(f"Completed in {time() - _st:.4f}s. {root_node.total_nodes - 1} nodes evaluated")
 
-            # define the possible future moves for this I am using nucleus sampling or top_p sampling
-            # https://arxiv.org/pdf/1904.09751.pdf, using this method reduces the repetitions
-            # In practice this means selecting the highest probability tokens whose cumulative probability
-            # mass exceeds the pre-chosen threshold p. The size of the sampling set will adjust dynamically
-            # based on the shape of the probability distribution at each time step. For high values of p,
-            # this is a small subset of vocabulary that takes up vast majority of the probability mass —
-            # the nucleus.
-            cumulative_probability_mass = np.cumsum(np.sort(lg_mask)[::-1])
-            future_moves = [legal_idx[i] for i,t in enumerate(cumulative_probability_mass > 0.98) if t]
-
-            # define a root node and create a tree for that root node (add to node.children)
-            root_node = Node(str(b.move_stack[-1]), value) # why call it stack it's a queue
-            generate_tree(
-                model=model,
-                depth=4,
-                root_node=root_node,
-                b=game.board,
-                future_moves=future_moves,
-                vocab=vocab,
-                inv_vocab=inv_vocab,
-                k=5
-            )
-            move = np.random.choice(legal)
-            print(root_node)
+            # now take the greedy move that maximises the value
+            sorted_moves = sorted([
+                    (c, minimax(c, 4, _max = True))
+                    for c in root_node.children
+                ], key = lambda x: x[1]
+            ) # Node object
+            value = sorted_moves[-1][1]
+            move = Move(sorted_moves[-1][0].move)
 
         elif self.search == "sample":
             # no searching, make a choice based on probability distribution
@@ -422,28 +430,31 @@ if __name__ == "__main__":
     pgn_writer_node = pgn_writer
     pgn_writer.headers["Event"] = "Test"
 
-    player1 = Player(config, ".model_sample/z4_0.pt",
+    player1 = Player(config, "models/z5/z5_6000.pt",
                      "assets/moves.json")  # assume to be white
     player2 = Player(config, "models/z5/z5_6000.pt",
-                     "assets/moves.json")  # assume to be black
+                     "assets/moves.json", search="minimax")  # assume to be black
 
     # play
     mv = 0
     done = False
     p = 0
     while not done:
-        # model returns move object, value, confidence of move
-        if p == 0:
-            m, v, c = player1.move(game)
-            p += 1
-            mv += 1
-        else:
-            m, v, c = player2.move(game)
-            p = 0
-        print(mv, "|", m, v, c)
-        done, res = game.step(m)
-        pgn_writer_node = pgn_writer_node.add_variation(m)
-        if res != "game" or mv == 40:
-            print("Game over")
+        try:
+            # model returns move object, value, confidence of move
+            if p == 0:
+                m, v, c = player1.move(game)
+                p += 1
+                mv += 1
+            else:
+                m, v, c = player2.move(game)
+                p = 0
+            print(mv, "|", m, v, c)
+            done, res = game.step(m)
+            pgn_writer_node = pgn_writer_node.add_variation(m)
+            if res != "game" or mv == 40:
+                print("Game over")
+                break
+        except KeyboardInterrupt:
             break
     print(pgn_writer, file=open("latest_game.pgn", "w"), end="\n\n")
