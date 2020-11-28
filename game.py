@@ -1,5 +1,8 @@
 """
 for reference (not used anywhere): https://www.pettingzoo.ml/classic
+
+torch is only used for neural network, the output values are converted to numpy
+and all the operations are then used for 
 """
 import json
 import random
@@ -10,15 +13,17 @@ import numpy as np
 import torch.nn.functional as F
 from model import BaseHFGPT, ModelConfig
 
-####### Engine #################################
-# Here I am writing a simple game engine that is NOT
-# borrowed from my another project that is a complete
-# Full Stack chess app, insted this is a much more
-# functional and generic. Most likely I will port this
-# over to my other repo
+
+def Move(x):
+    # get chess.Move object and force promote to queen
+    if x[-1].isdigit():
+        x = x[:-1] + "q"
+    return chess.Move.from_uci(x)
+
+
 ################################################
-
-
+####### Engine #################################
+################################################
 class GameEngine():
     def __init__(self):
         self.board = chess.Board()  # initialise an empty board
@@ -102,65 +107,123 @@ class GameEngine():
 
         return self.done, res
 
+
+################################################
+####### Helper Functions #######################
+################################################
+def softmax(x, dim=-1):
+    n = np.e ** x
+    d = np.sum(np.e ** x, axis=dim)
+    # col gets divided instead of row so double transpose
+    return (n.T / d).T
+
+
+def top_p(x, p = 0.98):
+    x_sorted = np.sort(x, axis = -1)[:, ::-1]
+    x_sorted_idx = np.argsort(x, axis = -1)[:, ::-1]
+    cdf = np.cumsum(x_sorted, axis = -1)
+    cdf_mask = np.greater(cdf, p)
+    # need to do list comprehension because there can be a shape mismatch
+    cdf_idx = [[x_sorted_idx[i,j] for j,f in enumerate(mask) if f] for i,mask in enumerate(cdf_mask)]
+    return cdf_idx
+
+
 ################################################
 ####### Tree ###################################
 ################################################
-
-def softmax(x, dim= -1):
-        n = np.e ** x
-        d = np.sum(np.e ** x, axis=dim)
-        return (n.T / d).T  # col gets divided instead of row so double transpose
-
 class Node():
     def __init__(self, value, move):
         self.value = value
         self.move = move
-        self.children = [] # initialise with a list
-        
+        self.children = []  # initialise with a list
+
     @property
     def terminal(self):
-        return len(self.childen) > 0
-    
+        return len(self.children) == 0
+
     def __eq__(self, n):
         return self.move == n.move
-    
+
     def __len__(self):
         return len(self.children)
 
     def __repr__(self):
-        return f"<Node: move '{self.move[:4]}' ({self.value:.3f})>"
+        return f"<Move '{self.move[:4]}' ({self.value:.3f}) {len(self)} Child>"
 
-def add_one(model, b, root_node, future_moves, vocab, inv_vocab, flip = True, k = 10):
-    # adds one depth of all the predictions to root_node.children
-    legal_moves = [vocab[str(x)[:4]] for x in b.legal_moves] # covert to ints for indexing
-    mv_batched = [[vocab[str(x)[:4]] for x in b.move_stack] + [l] for l in future_moves] # convert to ints
-    mv_batched = torch.Tensor(mv_batched).long()
-    logits, val_searched = model(input_ids = mv_batched)
-    flip = -1 if True else flip
-    for l,v in zip(future_moves, val_searched[:, -1].view(-1).tolist()):
-        root_node.children.append(Node(flip * v, inv_vocab[l]))
-        
-    # now get the top_k moves for all legal moves
-    logits = logits[:, -1, legal_moves].detach().numpy() # [N, m]
-    log_probs= softmax(logits)  # [N, 1793]
-    top_prob_mvids = np.argsort(log_probs, axis = 1)[:, ::-1][:, :k] # [N, k]
+    def __str__(self, level=0):
+        ret = "\t"*level+repr(self)+"\n"
+        for child in self.children:
+            ret += child.__str__(level+1)
+        return ret
+
+    @property
+    def s(self):
+        return self.__repr__()
+
+def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, verbose = False):
+    """Take one step into the future and update root's children + return the possible futures for those child"""
+    if mv_ids is None:
+        # special handling for firstm move
+        mv_ids = [vocab[str(x)[:4]] for x in b.legal_moves] # valid moves
     
-    return top_prob_mvids, legal_moves
+    if verbose:
+        print("Given Root:", root.s, "played on board:", b.fen(), [inv_vocab[x] for x in mv_ids])
+
+    mv_batched = np.asarray([[0] + [vocab[str(x)[:4]] for x in b.move_stack] + [l] for l in mv_ids])[:, :model.config.n_ctx]
+    with torch.no_grad():
+        logits, values = model(input_ids = torch.Tensor(mv_batched).long())
+        logits = logits[:, -1].numpy() # for each move, what is the distribution of future moves
+        values = values[:, -1].tolist()
+
+    # now get the possible future possibilities for each move taken
+    all_possible_future_moves = []
+    if verbose:
+        print("\nEntering Future possibilites determiner...")
+    for mv, lgt_mv, v_mv in zip(mv_ids, logits, values):
+        if verbose:
+            print("Applied", inv_vocab[mv], "on board", b.fen(), end = " ")
+        # push board to one future and determine what are the legal moves
+        bfuture = b.copy()
+        bfuture.push(Move(inv_vocab[mv]))
+        if verbose:
+            print("--> to get board", bfuture.fen())
+        future_legal = [vocab[str(x)[:4]] for x in bfuture.legal_moves] # valid futures
+
+        # now get probability distribution for for these legal moves and determine the top ones
+        lgt_mv = softmax(lgt_mv[future_legal])
+        lgt_mv = top_p(lgt_mv.reshape(1, len(lgt_mv)), p = 0.999)
+        future_legal = [future_legal[i] for i in lgt_mv[0]]
+        if verbose:
+            print("Using Futures", [inv_vocab[x] for x in future_legal], future_legal)
+        all_possible_future_moves.append(future_legal)
+
+        # add this child to the root
+        root.children.append(Node(v_mv[0], inv_vocab[mv]))
+    if verbose:
+        print("Completed adding one step future to", root.s, [len(x) for x in all_possible_future_moves], "\n\n")
+    return all_possible_future_moves
 
 
-def generate_tree(model, root_node, b, future_moves, vocab, inv_vocab, k = 5):
-    """generates a tree by iterating over top policies (breadth) by the model upto
-    a specified depth"""
+def generate_tree(model, depth, board, root_node, vocab, inv_vocab, mv_ids = None, verbose = False):
+    if verbose:
+        print(f"({depth})", root_node.s, "played on", board.fen(), [str(x) for x in board.move_stack[-7:]], "-- FM --", mv_ids)
 
-    # do the first search
-    top_prob_mvids, legal_moves = add_one(model, b, root_node, future_moves, vocab, inv_vocab, flip = True, k = k)
-    top_prob_mvids_strs = [[inv_vocab[legal_moves[i]] for i in tk] for tk in top_prob_mvids] # convert to strings
-
-    for i, child in enumerate(root_node.children):
-        # for each child move make a copy of the board add a move and get one depth
-        bcopy = b.copy()
-        bcopy.push(chess.Move.from_uci(child.move))
-        top_prob_mvids_child, lm_child = add_one(model, bcopy, child, future_moves = top_prob_mvids[i], flip = False, k = k)
+    # for each child what is the policy and add children to root_node
+    all_possible_child_moves = one_step(model = model, b = board, root = root_node, mv_ids=mv_ids,
+        verbose = verbose, vocab = vocab, inv_vocab = inv_vocab
+    )
+    
+    if depth > 1:
+        if verbose: 
+            print("Iterating over Children of", root_node.s)
+        for mv_ids, child in zip(all_possible_child_moves, root_node.children):
+            # take this child, and make the move on this board
+            bchild = board.copy()
+            bchild.push(Move(child.move))
+            generate_tree(
+                model = model, depth = depth - 1, board = bchild, root_node = child, 
+                mv_ids = mv_ids, verbose = verbose
+            )
 
 
 def minimax(node, depth, maxp, minp, _max = False):
@@ -198,8 +261,11 @@ def minimax(node, depth, maxp, minp, _max = False):
 ################################################
 
 class Player():
-    def __init__(self, config, save_path, vocab_path):
-        self.tree = None  # callable tree method
+    def __init__(self, config, save_path, vocab_path, search = "sample"):
+        if search not in ["sample", "random", "minimax"]:
+            raise ValueError(f"Searching method: {search} not defined")
+
+        self.search = search  # method used to determine the move
 
         self.config = config
         self.save_path = save_path
@@ -239,8 +305,7 @@ class Player():
         # make better choices man!
 
         # the default np.random.choice has problems when sum(p) != 1
-        # which is often the case when normalising using softmax above
-        # this code is hacked from the numpy code
+        # which is often the case when normalising using softmax this code is hacked from the numpy code
         # https://github.com/numpy/numpy/blob/maintenance/1.9.x/numpy/random/mtrand/mtrand.pyx#L1066
 
         # by default replace = False, we want only unique values
@@ -268,63 +333,80 @@ class Player():
         return a[found]
 
     def move(self, game):
-        # nn predicts the move and it's confidence on outcome (value?)
+        # nn predicts the move, value scalar and it's confidence for taking htat move (conf)
         config = self.model.config
         model = self.model
+        vocab = self.vocab
+        inv_vocab = self.inv_vocab
 
-        if self.tree is not None:
-            # self.tree: a tree callable object that takes in the model and board state
-            move = self.tree(model, game)
+        # vals to return
+        move = None
+        value = None
+        conf = None
 
-        else:
-            b = game.board
-            # this is no search algorithm / greedy sampled search
-            moves = [0] + [self.vocab[str(x)[:4]] for x in b.move_stack]
-            moves = moves[:config.n_ctx]
-            moves = torch.Tensor(moves).view(1, len(moves)).long().to(self.device)  # [1, N]
+        # define board data to be used with all situations
+        b = game.board
+        moves = [0] + [self.vocab[str(x)[:4]] for x in b.move_stack] # [0] for game start
+        moves = moves[:config.n_ctx]
+        moves = torch.Tensor(moves).view(1, len(moves)).long().to(self.device)  # [1, N]
 
-            legal = [x for x in b.legal_moves]
-            legal_idx = [self.vocab[str(x)[:4]] for x in b.legal_moves]
+        legal = [x for x in b.legal_moves]
+        legal_idx = [self.vocab[str(x)[:4]] for x in b.legal_moves]
 
-            # pass to model
+        # pass to model
+        with torch.no_grad():
             logits, values = model(input_ids=moves)
             logits = logits[0, -1]  # [B,N,V] --> [V]
-            values = values[0, -1]  # [B,N,1] --> [1]
-            values = values.item()  # scalar
-
-            # softmax over legal moves
-            lg_mask = logits.detach().numpy()[legal_idx]
+            value = values[0, -1].item()  # [B,N,1] --> scalar
+            
+            # softmax over legal moves, get the log-probabilities for legal moves
+            lg_mask = logits.numpy()[legal_idx]
             lg_mask = softmax(lg_mask)
+
+        if self.search == "minimax": # use a minimax method to determine the best possible move
+
+
+            # define the possible future moves for this I am using nucleus sampling or top_p sampling
+            # https://arxiv.org/pdf/1904.09751.pdf, using this method reduces the repetitions
+            # In practice this means selecting the highest probability tokens whose cumulative probability
+            # mass exceeds the pre-chosen threshold p. The size of the sampling set will adjust dynamically
+            # based on the shape of the probability distribution at each time step. For high values of p,
+            # this is a small subset of vocabulary that takes up vast majority of the probability mass —
+            # the nucleus.
+            cumulative_probability_mass = np.cumsum(np.sort(lg_mask)[::-1])
+            future_moves = [legal_idx[i] for i,t in enumerate(cumulative_probability_mass > 0.98) if t]
+
+            # define a root node and create a tree for that root node (add to node.children)
+            root_node = Node(str(b.move_stack[-1]), value) # why call it stack it's a queue
+            generate_tree(
+                model=model,
+                depth=4,
+                root_node=root_node,
+                b=game.board,
+                future_moves=future_moves,
+                vocab=vocab,
+                inv_vocab=inv_vocab,
+                k=5
+            )
+            move = np.random.choice(legal)
+            print(root_node)
+
+        elif self.search == "sample":
+            # no searching, make a choice based on probability distribution
             move = self.better_choice(legal, lg_mask, 1)[0]
+            conf = np.max(lg_mask)
 
-            # force promote to queen
-            if not str(move)[-1].isdigit():
-                move = chess.Move.from_uci(str(move)[:4] + "q")
+        elif self.search == "greedy":
+            # greedy method
+            move = legal[np.argmax(lg_mask)]
 
-            return move, values, np.max(lg_mask)
+        elif self.search == "random":
+            # random moves
+            move = np.random.choice(legal)
+            value = None
+            conf = None
 
-    def make_random_move(self, b):
-        legal_moves = list(b.legal_moves)
-        if not legal_moves:
-            return None
-        move = random.choice(legal_moves)
-        return move
-
-
-# define a random player for prototyping
-class RandomPlayer():
-    def __init__(self, id):
-        self.id = id
-
-    def move(self, b):
-        legal_moves = list(b.legal_moves)
-        if not legal_moves:
-            return None
-        move = random.choice(legal_moves)
-        return move
-
-    def __repr__(self):
-        return f"<Random Player {self.id}>"
+        return move, value, conf
 
 
 # test script
