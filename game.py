@@ -164,7 +164,7 @@ def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, verbose = False):
     """Take one step into the future and update root's children + return the possible futures for those child"""
     if mv_ids is None:
         # special handling for firstm move
-        mv_ids = [vocab[str(x)[:4]] for x in b.legal_moves][:3] # valid moves
+        mv_ids = [vocab[str(x)[:4]] for x in b.legal_moves] # valid moves
     
     if verbose:
         print("Given Root:", root.s, "played on board:", b.fen(), [inv_vocab[x] for x in mv_ids])
