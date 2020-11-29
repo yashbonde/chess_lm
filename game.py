@@ -206,7 +206,7 @@ def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, verbose = False):
 
         # now get probability distribution for for these legal moves and determine the top ones
         lgt_mv = softmax(lgt_mv[future_legal])
-        lgt_mv = top_p(lgt_mv.reshape(1, len(lgt_mv)), p = 0.999)
+        lgt_mv = top_p(lgt_mv.reshape(1, len(lgt_mv)), p = 0.99)
         future_legal = [future_legal[i] for i in lgt_mv[0]]
         if verbose:
             print("Using Futures", [inv_vocab[x] for x in future_legal], future_legal)
@@ -279,11 +279,12 @@ def minimax(node, depth, _max = False):
 ################################################
 
 class Player():
-    def __init__(self, config, save_path, vocab_path, search = "sample"):
+    def __init__(self, config, save_path, vocab_path, search = "sample", depth = 1):
         if search not in ["sample", "greedy", "random", "minimax"]:
             raise ValueError(f"Searching method: {search} not defined")
 
         self.search = search  # method used to determine the move
+        self.depth = depth # number of steps to look into the future
 
         self.config = config
         self.save_path = save_path
@@ -387,9 +388,9 @@ class Player():
 
             # generate tree for this node
             _st = time()
-            print("\nStarting tree generation ...", end = " ")
-            generate_tree(model=model, depth=2, board=b, root_node=root_node, vocab=vocab, inv_vocab=inv_vocab, verbose = False)
-            print(f"Completed in {time() - _st:.4f}s. {root_node.total_nodes - 1} nodes evaluated")
+            # print("\nStarting tree generation ...", end = " ")
+            generate_tree(model=model, depth=self.depth, board=b, root_node=root_node, vocab=vocab, inv_vocab=inv_vocab, verbose = False)
+            # print(f"Completed in {time() - _st:.4f}s. {root_node.total_nodes - 1} nodes evaluated")
 
             # now take the greedy move that maximises the value
             sorted_moves = sorted([
@@ -429,14 +430,15 @@ if __name__ == "__main__":
     config = ModelConfig(vocab_size=vocab_size, n_positions=180,
                          n_ctx=180, n_embd=128, n_layer=30, n_head=8)
     player2 = Player(config, "models/q1/q1_15000.pt",
-                     "assets/moves.json", search="sample")  # assume to be white
+                     "assets/moves.json", search="minimax",
+                     depth = 1)  # assume to be white
 
     for round in trange(100):
         print(f"Starting round: {round}")
         game = GameEngine()
         pgn_writer = chess.pgn.Game()
         pgn_writer_node = pgn_writer
-        pgn_writer.headers["Event"] = "Test"
+        pgn_writer.headers["Event"] = "Test with p=0.99 vs 0.999 in prev"
         pgn_writer.headers["White"] = "z4_0"
         pgn_writer.headers["Black"] = "q1_15000"
         pgn_writer.headers["Round"] = str(round)
@@ -458,9 +460,9 @@ if __name__ == "__main__":
                 # print(mv, "|", m, v, c)
                 done, res = game.step(m)
                 pgn_writer_node = pgn_writer_node.add_variation(m)
-                if res != "game" or mv == 90:
+                if res != "game" or mv == 50:
                     print("Game over")
                     break
         except KeyboardInterrupt:
-            pass
-        print(pgn_writer, file=open("auto_tournaments_sample.pgn", "a"), end="\n\n")
+            break
+        print(pgn_writer, file=open("auto_tournaments_search_d1.pgn", "a"), end="\n\n")
