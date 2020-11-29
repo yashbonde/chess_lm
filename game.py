@@ -424,11 +424,11 @@ if __name__ == "__main__":
         vocab_size = len(json.load(f))
     config = ModelConfig(vocab_size=vocab_size, n_positions=60,
                          n_ctx=60, n_embd=128, n_layer=30, n_head=8)
-    player1 = Player(config, "models/z5/z5_6000.pt",
+    player1 = Player(config, "models/z4/z4_0.pt",
                      "assets/moves.json", search="sample")  # assume to be black
     config = ModelConfig(vocab_size=vocab_size, n_positions=180,
                          n_ctx=180, n_embd=128, n_layer=30, n_head=8)
-    player2 = Player(config, "models/q1/q1_5000.pt",
+    player2 = Player(config, "models/q1/q1_15000.pt",
                      "assets/moves.json", search="sample")  # assume to be white
 
     for round in trange(100):
@@ -437,8 +437,8 @@ if __name__ == "__main__":
         pgn_writer = chess.pgn.Game()
         pgn_writer_node = pgn_writer
         pgn_writer.headers["Event"] = "Test"
-        pgn_writer.headers["White"] = "z5_6k"
-        pgn_writer.headers["Black"] = "q1_5000"
+        pgn_writer.headers["White"] = "z4_0"
+        pgn_writer.headers["Black"] = "q1_15000"
         pgn_writer.headers["Round"] = str(round)
         
         # play
