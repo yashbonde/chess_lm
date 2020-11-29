@@ -14,6 +14,16 @@ python3 play.py # goto http://0.0.0.0:5000/ in browser
 
 To see a random gameplay between two AI agents run `python3 game.py` which will print value, confidence for each move and create a PGN file. To see the gameplay online goto this [website](https://chesstempo.com/pgn-viewer/), copy pase your PGN.
 
+
+## It Learns!...?
+
+Somehow there are signs that it is infact good at predicting the value of the board, if not at the policy.
+Consider this simple game where two networks with the same weights were playing against one another. One used the minimax tree searching, while the other was using sampling.
+
+<img src="assets/self-play1.png">
+
+Note that the game did not turn out to be like that, infact both the models play (policy) very stupidly. However they do correctly understand the state of the board and balck better than white because of that depth search. This used a `z5` model and 
+
 ## Player
 
 The way to evaluate the model is to make it into a player and run it. To make a player do the following:
@@ -84,11 +94,12 @@ I use 2x1080Ti configuration with 128 GB of RAM, `batch_size=350` seems to fill 
 
 ### Training Logs
 
-| name | n_embd | n_layer | buffer_size | batch_size |
-| ---- | ------ | ------- | ----------- | ---------- |
-| v0   | 128    | 30      | 55555       | 350        |
-| v6   | 256    | 20      | 1000000     | 256        |
-| z5   | 128    | 30      | Full        | 350        |
+| name | n_embd | n_layer | buffer_size | batch_size | maxlen |
+| ---- | ------ | ------- | ----------- | ---------- | ------ |
+| v0   | 128    | 30      | 55555       | 350        | 60     |
+| v6   | 256    | 20      | 1000000     | 256        | 60     |
+| z5   | 128    | 30      | Full        | 350        | 60     |
+| q1   | 128    | 30      | Full        | 90         | 180    |
 
 Consider the loss graph below, grey one is `v0`, red is `v6` and orange is `z5`. You can see that larger buffer improves the training as seen between `v0` and `v6`, both in overall loss and smoother loss curves. When compared with fully loaded dataset in `z5` the loss curve is more smoother while the training takes longer. It eventually does reach the lower loss value (epoch-end). Due to a bug in the `IterableDataset` number of samples was lower than fully loaded counterpart also seen is that a larger model gives only a slight edge over the smaller counterpart while parameters are ~3x.
 

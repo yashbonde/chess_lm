@@ -431,7 +431,7 @@ if __name__ == "__main__":
     pgn_writer.headers["Event"] = "Test"
 
     player1 = Player(config, "models/z5/z5_6000.pt",
-                     "assets/moves.json")  # assume to be white
+                     "assets/moves.json", search="minimax")  # assume to be white
     player2 = Player(config, "models/z5/z5_6000.pt",
                      "assets/moves.json", search="minimax")  # assume to be black
 
