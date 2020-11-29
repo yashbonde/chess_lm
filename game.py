@@ -9,6 +9,7 @@ import chess
 import chess.pgn
 import torch
 import numpy as np
+from tqdm import trange
 from time import time
 import torch.nn.functional as F
 from model import BaseHFGPT, ModelConfig
@@ -364,7 +365,7 @@ class Player():
         # define board data to be used with all situations
         b = game.board
         moves = [0] + [self.vocab[str(x)[:4]] for x in b.move_stack] # [0] for game start
-        moves = moves[:config.n_ctx]
+        moves = moves[-config.n_ctx:]
         moves = torch.Tensor(moves).view(1, len(moves)).long().to(self.device)  # [1, N]
 
         legal = [x for x in b.legal_moves]
@@ -419,42 +420,47 @@ class Player():
 
 # test script
 if __name__ == "__main__":
-
     with open("assets/moves.json") as f:
         vocab_size = len(json.load(f))
     config = ModelConfig(vocab_size=vocab_size, n_positions=60,
                          n_ctx=60, n_embd=128, n_layer=30, n_head=8)
-
-    game = GameEngine()
-    pgn_writer = chess.pgn.Game()
-    pgn_writer_node = pgn_writer
-    pgn_writer.headers["Event"] = "Test"
-
     player1 = Player(config, "models/z5/z5_6000.pt",
-                     "assets/moves.json", search="minimax")  # assume to be white
-    player2 = Player(config, "models/z5/z5_6000.pt",
-                     "assets/moves.json", search="minimax")  # assume to be black
+                     "assets/moves.json", search="sample")  # assume to be black
+    config = ModelConfig(vocab_size=vocab_size, n_positions=180,
+                         n_ctx=180, n_embd=128, n_layer=30, n_head=8)
+    player2 = Player(config, "models/q1/q1_5000.pt",
+                     "assets/moves.json", search="sample")  # assume to be white
 
-    # play
-    mv = 0
-    done = False
-    p = 0
-    while not done:
+    for round in trange(100):
+        print(f"Starting round: {round}")
+        game = GameEngine()
+        pgn_writer = chess.pgn.Game()
+        pgn_writer_node = pgn_writer
+        pgn_writer.headers["Event"] = "Test"
+        pgn_writer.headers["White"] = "z5_6k"
+        pgn_writer.headers["Black"] = "q1_5000"
+        pgn_writer.headers["Round"] = str(round)
+        
+        # play
+        mv = 0
+        done = False
+        p = 0
         try:
-            # model returns move object, value, confidence of move
-            if p == 0:
-                m, v, c = player1.move(game)
-                p += 1
-                mv += 1
-            else:
-                m, v, c = player2.move(game)
-                p = 0
-            print(mv, "|", m, v, c)
-            done, res = game.step(m)
-            pgn_writer_node = pgn_writer_node.add_variation(m)
-            if res != "game" or mv == 40:
-                print("Game over")
-                break
+            while not done:
+                # model returns move object, value, confidence of move
+                if p == 0:
+                    m, v, c = player1.move(game)
+                    p += 1
+                    mv += 1
+                else:
+                    m, v, c = player2.move(game)
+                    p = 0
+                # print(mv, "|", m, v, c)
+                done, res = game.step(m)
+                pgn_writer_node = pgn_writer_node.add_variation(m)
+                if res != "game" or mv == 90:
+                    print("Game over")
+                    break
         except KeyboardInterrupt:
-            break
-    print(pgn_writer, file=open("latest_game.pgn", "w"), end="\n\n")
+            pass
+        print(pgn_writer, file=open("auto_tournaments_sample.pgn", "a"), end="\n\n")
