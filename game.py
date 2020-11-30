@@ -206,7 +206,7 @@ def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, verbose = False):
 
         # now get probability distribution for for these legal moves and determine the top ones
         lgt_mv = softmax(lgt_mv[future_legal])
-        lgt_mv = top_p(lgt_mv.reshape(1, len(lgt_mv)), p = 0.99)
+        lgt_mv = top_p(lgt_mv.reshape(1, len(lgt_mv)), p = 0.95)
         future_legal = [future_legal[i] for i in lgt_mv[0]]
         if verbose:
             print("Using Futures", [inv_vocab[x] for x in future_legal], future_legal)
@@ -438,7 +438,7 @@ if __name__ == "__main__":
         game = GameEngine()
         pgn_writer = chess.pgn.Game()
         pgn_writer_node = pgn_writer
-        pgn_writer.headers["Event"] = "Test with p=0.99 vs 0.999 in prev"
+        pgn_writer.headers["Event"] = "Test with p=0.95"
         pgn_writer.headers["White"] = "z4_0"
         pgn_writer.headers["Black"] = "q1_15000"
         pgn_writer.headers["Round"] = str(round)

@@ -112,12 +112,12 @@ I use 2x1080Ti configuration with 128 GB of RAM, `batch_size=350` seems to fill 
 
 ### Training Logs
 
-| name | n_embd | n_layer | buffer_size | batch_size | maxlen |
-| ---- | ------ | ------- | ----------- | ---------- | ------ |
+| name        | n_embd | n_layer | buffer_size | batch_size | maxlen |
+| ------------| ------ | ------- | ----------- | ---------- | ------ |
 | v0 (grey)   | 128    | 30      | 55555       | 350        | 60     |
-| v6 (red)  | 256    | 20      | 1000000     | 256        | 60     |
-| z5 (orange)  | 128    | 30      | Full        | 350        | 60     |
-| q1 (blue)  | 128    | 30      | Full        | 90         | 180    |
+| v6 (red)    | 256    | 20      | 1000000     | 256        | 60     |
+| z5 (orange) | 128    | 30      | Full        | 350        | 60     |
+| q1 (blue)   | 128    | 30      | Full        | 90         | 180    |
 
 You can see that larger buffer improves the training as seen between `v0` and `v6`, both in overall loss and smoother loss curves. When compared with fully loaded dataset in `z5` the loss curve is more smoother while the training takes longer. It eventually does reach the lower loss value (epoch-end). Due to a bug in the `IterableDataset` number of samples was lower than fully loaded counterpart also seen is that a larger model gives only a slight edge over the smaller counterpart while parameters are ~3x.
 
@@ -133,6 +133,15 @@ How do we find out whether the model is learning or not. Often during the gamepl
 ```
 
 I need to come up with good metrics!
+
+## Updates
+
+- **30/12/2020** As I had new learnings, there were something that needed deprecation and improvements:
+  - No longer supporting IterativeDatasets, full work much better
+  - Bring back train/holdout sets to be generated from same function
+  - Improve logging in tensorboard, now logs move accuracy as the training progresses
+  - Testing now happens as the training progresses and not after an epoch (re wrote `Trainer.train()` method for this)
+  - Though `max_epochs` is not deprecated, it will always be 1
 
 ## Credits
 
