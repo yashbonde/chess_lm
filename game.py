@@ -157,6 +157,15 @@ class Node():
             n += c.total_nodes
         return n
 
+    def all_children(self):
+        c = []
+        if self.children:
+            for child in self.children:
+                c.extend(child.all_children())
+        else:
+            c = [self]
+        return c
+
     def __eq__(self, n):
         return self.move == n.move
 
@@ -248,6 +257,31 @@ def generate_tree(model, depth, board, root_node, vocab, inv_vocab, mv_ids = Non
                 mv_ids=mv_ids, verbose=verbose, vocab=vocab, inv_vocab=inv_vocab,
                 mv_probs=mv_probs
             )
+
+
+def update_node_bonus(root_node):
+    # update the `n` in all the nodes
+    ac = root_node.all_children()
+    unq = []
+    for c in ac:
+        if c not in unq:
+            unq.append(c)
+
+    # create a counter --> horrible code
+    cntr = {}
+    for c in unq:
+        for cc in ac:
+            if c == cc:
+                if c.move not in cntr:
+                    cntr[c.move] = 1
+                else:
+                    cntr[c.move] += 1
+
+    # now go over the children and update those
+    for c in ac:
+        c.n = cntr[c.move]
+
+    return root_node
 
 
 def minimax(node, depth, _max = False):
@@ -400,6 +434,7 @@ class Player():
             # print("\nStarting tree generation ...", end = " ")
             generate_tree(model=model, depth=self.depth, board=b, root_node=root_node, vocab=vocab, inv_vocab=inv_vocab, verbose = False)
             # print(f"Completed in {time() - _st:.4f}s. {root_node.total_nodes - 1} nodes evaluated")
+            root_node = update_node_bonus(root_node)
 
             # now take the greedy move that maximises the value
             sorted_moves = sorted([
