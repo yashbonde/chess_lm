@@ -32,6 +32,7 @@ args.add_argument("--num_epochs", type=int, default=1, help="Number of epochs to
 args.add_argument("--save_folder", type=str, default="models", help="Folder to save model to")
 args.add_argument("--model", type=str, default="cgpt", help="Saved model to have filepath `<model>.pt`")
 args.add_argument("--test_every", type=int, default=100, help="Test after these global steps")
+args.add_argument("--patience", type=int, default=3, help="Early stopping partience value")
 args = args.parse_args()
 
 # path and file management
@@ -67,7 +68,8 @@ trainerConf = TrainerConfig(
     betas = (args.beta1, args.beta2),
     tb_path = model_folder,
     save_every = args.save_every,
-    ckpt_path = model_path
+    ckpt_path = model_path,
+    patience = args.patience,
 )
 trainer = Trainer(model, dstrain, trainerConf)
 trainer.train()

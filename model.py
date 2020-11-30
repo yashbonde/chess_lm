@@ -34,12 +34,6 @@ class BaseHFGPT(nn.Module):
         self.gpt = GPT2Model(config)
         self.policy_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
         self.value_head = nn.Linear(config.n_embd, 1)
-        self.n_params = sum(dict((p.data_ptr(), p.numel()) for p in self.parameters()).values())
-
-    @property
-    def num_parameters(self):
-        return self.n_params
-
 
     def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
         x = self.gpt(input_ids, return_dict = True, **gptkwargs)
@@ -57,6 +51,7 @@ class BaseHFGPT(nn.Module):
             loss_value = loss_value.mean()
 
             loss = loss_policy + loss_value
+
             out = (logits, values, (loss, loss_policy, loss_value))
         return out
 
@@ -80,12 +75,14 @@ class Trainer:
 
     def save_checkpoint(self, ckpt_path = None):
         raw_model = self.model.module if hasattr(self.model, "module") else self.model
-        print(f"Saving Model at {ckpt_path}")
         ckpt_path = ckpt_path if ckpt_path is not None else self.config.ckpt_path
+        print(f"Saving Model at {ckpt_path}")
         torch.save(raw_model.state_dict(), ckpt_path)
 
     def train(self):
         model, config = self.model, self.config
+        train_data = self.train_dataset
+        test_data = self.test_dataset
         optimizer = torch.optim.Adam(
             model.parameters(),
             lr = config.learning_rate,
@@ -93,66 +90,167 @@ class Trainer:
         )
 
         with SummaryWriter(log_dir=config.tb_path, flush_secs=20) as tb:
-            def run_epoch(split, _gs = None):
-                is_train = split == "train"
-                model.train(is_train)
-                data = self.train_dataset if is_train else self.test_dataset
-                dl = DataLoader(
-                    data,
-                    pin_memory = True,
-                    batch_size = config.batch_size,
-                    shuffle = data.shuffle
-                )
+            # this is second method for creating a training loop
+            num_batches = len(train_data) // config.batch_size + int(len(train_data) % config.batch_size != 0)
+            total_steps = num_batches * config.n_epochs
+            pbar_train = trange(total_steps, ncols=100)
+            dl_train = DataLoader( dataset=test_data, pin_memory=True, batch_size=config.batch_size, shuffle=test_data.shuffle )
+            prev_train_loss = 100000 # what was the training loss in previos testing cycle
+            no_loss_steps = 0 # no of steps since there was devrease in the loss
+            break_training = False
+            train_losses = [-1]
+            for gs, d in zip(pbar_train, dl_train):
+                # total steps is now the primary loss
+                epoch = gs // config.batch_size
+                pbar_train.set_description(f"[TRAIN] GS: {gs}, Epoch: {epoch}, Loss: {round(train_losses[-1], 5)}")
 
-                num_batches = len(data) // config.batch_size + int(len(data) % config.batch_size != 0)
+                # get model results
+                (policy, values, loss) = model(loss=True, **d)
+                loss_total = loss[0].mean() # gather
+                loss_policy = loss[1].mean() # gather
+                loss_value = loss[2].mean() # gather
+                train_losses.append(loss_total.item())
 
-                losses = []
-                pbar = trange(num_batches, ncols = 100)
-                for it, d in zip(pbar, dl):
-                    _l = -1 if not losses else losses[-1]
-                    if is_train:
-                        pbar.set_description(f"[TRAIN] GS: {_gs}, IT: {it}, Loss: {round(_l, 5)}")
-                    else:
-                        pbar.set_description(f"[VAL] Epoch: {_gs}")
+                # calculate move accuracy
+                policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
+                move_acc = sum(d["input_ids"][:, 1:].contiguous().view(-1), torch.argmax(policy, dim=-1)).item()
 
-                    d = {k:v.to(self.device) for k,v in d.items()}
-                    # print({k:v.size() for k,v in d.items()})
+                # add to tensorboard
+                tb.add_scalar("test/loss_total", loss_total.item(), global_step=gs, walltime=time.time())
+                tb.add_scalar("test/loss_policy", loss_policy.item(), global_step=gs, walltime=time.time())
+                tb.add_scalar("test/loss_value", loss_value.item(), global_step=gs, walltime=time.time())
+                tb.add_scalar("test/move_acc", move_acc, global_step=gs, walltime=time.time())
 
-                    with torch.set_grad_enabled(is_train):
-                        (out, _, loss) = model(loss = True, **d)
-                        loss_total = loss[0].mean() # gather
-                        loss_policy = loss[1].mean() # gather
-                        loss_value = loss[2].mean() # gather
-                        losses.append(loss_total.item())
+                # backprop
+                loss_total.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
+                optimizer.step()
 
-                    # save if required
-                    if _gs % config.save_every == 0:
-                        cp = config.ckpt_path.replace(".pt", f"_{_gs}.pt")
+                # test if time has come
+                if gs % config.test_every == 0:
+                    dl_test = DataLoader(
+                        dataset = test_data, pin_memory = True, batch_size = config.batch_size, shuffle=test_data.shuffle
+                    )
+
+                    num_batches = len(test_data) // config.batch_size + int(len(test_data) % config.batch_size != 0)
+
+                    test_losses = []
+                    pbar_test = trange(num_batches, ncols = 100)
+                    for it, d in zip(pbar_test, dl_test):
+                        pbar_test.set_description(f"[VAL] Global ({gs}) -> [{it + 1}/{num_batches}]")
+
+                        with torch.no_grad():
+                            # get model results
+                            (policy, values, loss) = model(loss=True, **d)
+                            loss_total = loss[0].mean() # gather
+                            loss_policy = loss[1].mean() # gather
+                            loss_value = loss[2].mean() # gather
+                            test_losses.append(loss_total.item())
+
+                            # calculate move accuracy
+                            policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
+                            move_acc = sum(d["input_ids"][:, 1:].contiguous().view(-1), torch.argmax(policy, dim=-1)).item()
+
+                            # add to tensorboard
+                            tb.add_scalar("test/loss_total", loss_total.item(), global_step=gs, walltime=time.time())
+                            tb.add_scalar("test/loss_policy", loss_policy.item(), global_step=gs, walltime=time.time())
+                            tb.add_scalar("test/loss_value", loss_value.item(), global_step=gs, walltime=time.time())
+                            tb.add_scalar("test/move_acc", move_acc, global_step=gs, walltime=time.time())
+
+                    # now testing is complete so see the results, save or stop if needed
+                    losses = np.mean(test_losses)
+                    print(f"Loss: {losses}", end = " ")
+
+                    if prev_train_loss < losses:
+                        prev_train_loss = losses
+                        no_loss_steps = 0
+                        print("... previous loss was larger, updating values")
+                        cp = config.ckpt_path.replace(".pt", f"_{gs}.pt")
                         self.save_checkpoint(cp)
+                    else:
+                        no_loss_steps += 1
+                        print(f"... previous loss was smaller. No improvements for past {no_loss_steps} evaluations")
+                    
+                    if config.patience != -1 and  no_loss_steps == config.patience:
+                        break_training = True
 
-                    if is_train:
-                        # add things to tb, loss and attention images
-                        tb.add_scalar("loss/loss_total", loss_total.item(), global_step=_gs, walltime=time.time())
-                        tb.add_scalar("loss/policy", loss_policy.item(), global_step=_gs, walltime=time.time())
-                        tb.add_scalar("loss/value", loss_value.item(), global_step=_gs, walltime=time.time())
+                if break_training:
+                    print("Stopping training")
+                    break
 
-                        loss_total.backward()
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
-                        optimizer.step()
-                        _gs += 1
-                
-                if not is_train:
-                    test_loss = float(np.mean(losses))
-                    return test_loss
 
-                return _gs
+            ### The code below is saved for reference I don't use this method anymore
 
-            # now write wrapper for each epoch
-            gs = 0
-            for e in range(config.max_epochs):
-                gs = run_epoch("train", gs)
-                self.save_checkpoint()
+            # def run_epoch(split, _gs = None):
+            #     is_train = split == "train"
+            #     model.train(is_train)
+            #     data = self.train_dataset if is_train else self.test_dataset
+            #     dl = DataLoader(
+            #         data,
+            #         pin_memory = True,
+            #         batch_size = config.batch_size,
+            #         shuffle = data.shuffle
+            #     )
 
+            #     num_batches = len(data) // config.batch_size + int(len(data) % config.batch_size != 0)
+
+            #     losses = []
+            #     pbar = trange(num_batches, ncols = 100)
+            #     for it, d in zip(pbar, dl):
+            #         _l = -1 if not losses else losses[-1]
+            #         if is_train:
+            #             pbar.set_description(f"[TRAIN] GS: {_gs}, IT: {it}, Loss: {round(_l, 5)}")
+            #         else:
+            #             pbar.set_description(f"[VAL] Epoch: {_gs}")
+
+            #         d = {k:v.to(self.device) for k,v in d.items()}
+            #         # print({k:v.size() for k,v in d.items()})
+            #         with torch.set_grad_enabled(is_train):
+            #             (policy, values, loss) = model(loss=True, **d)
+            #             loss_total = loss[0].mean() # gather
+            #             loss_policy = loss[1].mean() # gather
+            #             loss_value = loss[2].mean() # gather
+            #             losses.append(loss_total.item())
+
+            #             policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
+            #             values = values[:,:-1,0].contiguous().view(-1)
+            #             move_acc = sum(d["input_ids"][:, 1:].contiguous().view(-1), torch.argmax(policy, dim=-1)).item()
+
+            #         # save if required
+            #         if _gs % config.save_every == 0:
+            #             cp = config.ckpt_path.replace(".pt", f"_{_gs}.pt")
+            #             self.save_checkpoint(cp)
+
+            #         if is_train:
+            #             # add things to tb, loss and attention images
+            #             tb.add_scalar("train/loss_total", loss_total.item(), global_step=_gs, walltime=time.time())
+            #             tb.add_scalar("train/loss_policy", loss_policy.item(), global_step=_gs, walltime=time.time())
+            #             tb.add_scalar("train/loss_value", loss_value.item(), global_step=_gs, walltime=time.time())
+            #             tb.add_scalar("train/move_acc", move_acc, global_step=_gs, walltime=time.time())
+
+            #             loss_total.backward()
+            #             torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
+            #             optimizer.step()
+            #             _gs += 1
+
+            #         else:
+            #             # add to tensorboard
+            #             tb.add_scalar("test/loss_total", loss_total.item(), global_step=_gs, walltime=time.time())
+            #             tb.add_scalar("test/loss_policy", loss_policy.item(), global_step=_gs, walltime=time.time())
+            #             tb.add_scalar("test/loss_value", loss_value.item(), global_step=_gs, walltime=time.time())
+            #             tb.add_scalar("test/move_acc", move_acc, global_step=_gs, walltime=time.time())
+
+            #     if not is_train:
+            #         test_loss = float(np.mean(losses))
+            #         return test_loss
+
+            #     return _gs
+
+            # # now write wrapper for each epoch
+            # gs = 0
+            # for e in range(config.max_epochs):
+            #     gs = run_epoch("train", gs)
+            #     self.save_checkpoint()
 
 class TrainerConfig:
     max_epochs = 10
@@ -163,87 +261,94 @@ class TrainerConfig:
     num_workers = 0 # for DataLoader
     ckpt_path = None
     tb_path = None
+    patience = -1
 
     def __init__(self, **kwargs):
-        self.attrs = []
+        self.attrs = [
+            "max_epochs",
+            "batch_size",
+            "learning_rate",
+            "betas",
+            "grad_norm_clip",
+            "num_workers",
+            "ckpt_path",
+            "tb_path",
+            "patience",
+        ]
         for k,v in kwargs.items():
             setattr(self, k, v)
             self.attrs.append(k)
 
     def __repr__(self):
         return "---- TRAINER CONFIGURATION ----\n" + \
-            "\n".join([f"{k}\t{getattr(self, k)}" for k in list(set([
-                "max_epochs",
-                "batch_size",
-                "learning_rate",
-                "betas",
-                "grad_norm_clip",
-                "num_workers",
-            ] + self.attrs))
+            "\n".join([f"{k}\t{getattr(self, k)}" for k in list(set(self.attrs))
         ]) + "\n"
 
-
-class Evaluator():
-    # should be inside the main training code
-    def __init__(self, model, dataset, batch_size):
-        self.model = model
-        self.dataset = dataset
-        self.batch_size = batch_size
-
-        self.device = "cpu"
-        if torch.cuda.is_available():
-            self.device = torch.cuda.current_device()
-            self.model = torch.nn.DataParallel(self.model).to(self.device)
-            print("Model is now CUDA!")
-
-    def winner_acc(self, p, a):
-        p[p < -0.33] = -1.
-        p[p > 0.33] = 1.
-        p[(p <= 0.33) & (p >=-0.33)] = 0.
-        corr = sum(p == a)
-        return corr
-
-    def move_acc(self, pred, act):
-        return sum(pred == act)
-
-    def eval(self):
-        model= self.model
-        model.eval()
-        data = self.dataset
-        dl = DataLoader(
-            data,
-            pin_memory = True,
-            batch_size = self.batch_size,
-        )
-
-        num_batches = len(data) // self.batch_size + int(len(data) % self.batch_size != 0)
-        pbar = trange(num_batches, ncols = 100)
-
-        acc_win, acc_pred, total = 0, 0, 0
-        for it, d in zip(pbar, dl):
-            d = {k:v.to(self.device) for k,v in d.items()}
-            out = model(**d)
-
-            policy, values = out
-            
-            policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
-            values = values[:,:-1,0].contiguous().view(-1)
-
-            acc_win += self.winner_acc(
-                values.cpu().detach().numpy(),
-                d["value_targets"][:, 1:].contiguous().view(-1).cpu().detach().numpy()
-            )
-            acc_pred += self.move_acc(
-                d["input_ids"][:, 1:].contiguous().view(-1),
-                torch.argmax(policy, dim = -1)
-            ).item()
-            total += len(policy)
-
-        return (acc_win, acc_pred, total)
 
 ################################################
 ####### Dataset ################################
 ################################################
+class FullDatasetPreLoaded(Dataset):
+    def __init__(self, lms, results, m2id):
+        self.lms = lms
+        self.results = results
+        self.m2id = m2id
+
+    def __len__(self):
+        return self.lms.shape[0]
+
+    def __getitem__(self, index):
+        return {
+            "input_ids": torch.from_numpy(self.lms[index]).long(),
+            "value_targets": torch.from_numpy(self.results[index]).float()
+        }
+
+def get_datasets(config, split):
+    """This function returns two datasets one for training and another for holdout
+    No need to load to different datasets or create a split between them"""
+
+    len_file = 0
+    with open(config.lm, "r") as f:
+        for _ in f:
+            len_file += 1
+    total_len = len_file
+
+    with open(config.m2id, "r") as m:
+        m2id = json.load(m)
+        if "[GAME]" not in m2id:  # only if not found
+            GAME = len(m2id)
+            m2id["[GAME]"] = GAME  # new game flag
+        else:
+            GAME = m2id["[GAME]"]
+
+    # now load the complete dataset in memory
+    with open(config.lm, "r") as flm, open(config.rf, "r") as fres:
+        lms = [] # all the sequences
+        results = [] # all the results
+        print("Loading samples in memory ... this will take some time")
+        for idx, lm, game_res in zip(trange(total_len), flm, fres):
+            # ignore BOS + EOS tags, [GAME] does it for us
+            lm = list(map(lambda x: int(x.strip()), lm.split()))[1:-1]
+            lms.extend([GAME] + lm)
+
+            # get the targets for values as [0,res,-res,res,-res...]
+            game_res = float(game_res)
+            res = np.ones(len(lm)) * game_res
+            res[np.arange(1, len(lm), 2)] = -game_res
+            results.extend([0] + res.tolist()) # first will always generate 0
+
+    # now convert this long list to sequence
+    lms = np.array(lms[:-(len(lms) % config.maxlen)]).reshape(-1, config.maxlen)
+    results = np.array(results[:-(len(results) % config.maxlen)]).reshape(-1, config.maxlen)
+
+    print(f"Moves: {lms.shape}; Results: {results.shape}")
+
+    train_idx = int(split * lms.shape[0])
+    ds_train = FullDatasetPreLoaded(lms[:train_idx], results[:train_idx], m2id)
+    ds_test = FullDatasetPreLoaded(lms[train_idx:], results[train_idx:], m2id)
+
+    return ds_train, ds_test
+
 
 class ChessData(IterableDataset):
     def __init__(self, config):

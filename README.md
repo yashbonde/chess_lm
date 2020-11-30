@@ -139,9 +139,9 @@ I need to come up with good metrics!
 - **30/12/2020** As I had new learnings, there were something that needed deprecation and improvements:
   - No longer supporting IterativeDatasets, full work much better
   - Bring back train/holdout sets to be generated from same function
-  - Improve logging in tensorboard, now logs move accuracy as the training progresses
+  - Improve logging in tensorboard, now logs move accuracy, train and evaluation have same logs for consistency
   - Testing now happens as the training progresses and not after an epoch (re wrote `Trainer.train()` method for this)
-  - Though `max_epochs` is not deprecated, it will always be 1
+  - `total_steps` is now the default iteration method and not `max_epochs`, determined using `total_step = num_batch * max_epochs` and add early stopping. This brings is closer to the literature where training is done over a fixed set of steps and valuation also happens on steps and not epochs.
 
 ## Credits
 
