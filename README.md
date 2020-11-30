@@ -33,12 +33,10 @@ This is the task list:
   - Add code for creating metric graphs.
 - [ ] Integrate code with a web interface on [chessshhh](https://github.com/yashbonde/chessshhh)
   - Port code for server
-    - There's this CORS shit for API and static file code is not being read correctly. Someone else has to fix those.
-- [ ] Add Simple MinMax Tree search
-  - ~~Write code for minimax~~
-  - ~~Integrate with `Player`~~
-  - ~~Log Improvements, gameplay. Run tournaments~~
-  - Optimise code for deeper search. Add a timed buffer such that it 
+    - There's this CORS for API and static file code is not being read correctly. Someone else has to fix those.
+- Improvements to Tree search
+  - Optimise code for deeper search. Add a timed buffer such that it.
+  - Include upper confidence bound for better search
 - [ ] (**later**) Add more complicated search algorithm MCTS
 
 

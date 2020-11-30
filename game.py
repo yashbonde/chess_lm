@@ -140,10 +140,11 @@ def top_p(x, p = 0.98):
 ####### Tree ###################################
 ################################################
 class Node():
-    def __init__(self, value, move):
+    def __init__(self, value, move, p):
         self.value = value
         self.move = move
         self.children = []  # initialise with a list
+        self.prior = p # this is the probability that policy network gives
 
     @property
     def terminal(self):
@@ -175,8 +176,12 @@ class Node():
     def s(self):
         return self.__repr__()
 
-def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, verbose = False):
+def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, mv_probs = None, verbose = False):
     """Take one step into the future and update root's children + return the possible futures for those child"""
+    if mv_ids is not None:
+        assert mv_probs is not None, "Provide probability as well"
+        assert len(mv_ids) == len(mv_probs)
+
     if mv_ids is None:
         # special handling for firstm move
         mv_ids = [vocab[str(x)[:4]] for x in b.legal_moves] # valid moves
@@ -192,9 +197,10 @@ def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, verbose = False):
 
     # now get the possible future possibilities for each move taken
     all_possible_future_moves = []
+    all_possible_future_moves_probs = []
     if verbose:
         print("\nEntering Future possibilites determiner...")
-    for mv, lgt_mv, v_mv in zip(mv_ids, logits, values):
+    for mv, mvp, lgt_mv, v_mv in zip(mv_ids, mv_probs, logits, values):
         if verbose:
             print("Applied", inv_vocab[mv], "on board", b.fen(), end = " ")
         # push board to one future and determine what are the legal moves
@@ -206,38 +212,41 @@ def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, verbose = False):
 
         # now get probability distribution for for these legal moves and determine the top ones
         lgt_mv = softmax(lgt_mv[future_legal])
-        lgt_mv = top_p(lgt_mv.reshape(1, len(lgt_mv)), p = 0.95)
-        future_legal = [future_legal[i] for i in lgt_mv[0]]
+        lgt_mv_idx = top_p(lgt_mv.reshape(1, len(lgt_mv)), p=0.98)  # [1, N]
+        future_legal = [future_legal[i] for i in lgt_mv_idx[0]]
+        lgt_mv_probs = [lgt_mv[i] for i in lgt_mv_idx[0]]
         if verbose:
             print("Using Futures", [inv_vocab[x] for x in future_legal], future_legal)
         all_possible_future_moves.append(future_legal)
+        all_possible_future_moves_probs.append(lgt_mv_probs)
 
         # add this child to the root
-        root.children.append(Node(v_mv[0], inv_vocab[mv]))
+        root.children.append(Node(v_mv[0], inv_vocab[mv], mvp))
     if verbose:
         print("Completed adding one step future to", root.s, [len(x) for x in all_possible_future_moves], "\n\n")
-    return all_possible_future_moves
+    return all_possible_future_moves, all_possible_future_moves_probs
 
 
-def generate_tree(model, depth, board, root_node, vocab, inv_vocab, mv_ids = None, verbose = False):
+def generate_tree(model, depth, board, root_node, vocab, inv_vocab, mv_ids = None, mv_probs = None, verbose = False):
     if verbose:
         print(f"({depth})", root_node.s, "played on", board.fen(), [str(x) for x in board.move_stack[-7:]], "-- FM --", mv_ids)
 
     # for each child what is the policy and add children to root_node
-    all_possible_child_moves = one_step(model = model, b = board, root = root_node, mv_ids=mv_ids,
-        verbose = verbose, vocab = vocab, inv_vocab = inv_vocab
+    all_possible_future_moves, all_possible_future_moves_probs = one_step(model=model, b=board, root=root_node, mv_ids=mv_ids,
+                                        verbose=verbose, vocab=vocab, inv_vocab=inv_vocab, mv_probs=mv_probs
     )
     
     if depth > 1:
         if verbose: 
             print("Iterating over Children of", root_node.s)
-        for mv_ids, child in zip(all_possible_child_moves, root_node.children):
+        for mv_ids, mv_probs, child in zip(all_possible_future_moves, all_possible_future_moves_probs, root_node.children):
             # take this child, and make the move on this board
             bchild = board.copy()
             bchild.push(Move(child.move))
             generate_tree(
                 model = model, depth = depth - 1, board = bchild, root_node = child, 
-                mv_ids=mv_ids, verbose=verbose, vocab=vocab, inv_vocab=inv_vocab
+                mv_ids=mv_ids, verbose=verbose, vocab=vocab, inv_vocab=inv_vocab,
+                mv_probs=mv_probs
             )
 
 
@@ -423,17 +432,17 @@ class Player():
 if __name__ == "__main__":
     with open("assets/moves.json") as f:
         vocab_size = len(json.load(f))
-    config = ModelConfig(vocab_size=vocab_size, n_positions=60,
-                         n_ctx=60, n_embd=128, n_layer=30, n_head=8)
-    player1 = Player(config, "models/z4/z4_0.pt",
-                     "assets/moves.json", search="sample")  # assume to be black
     config = ModelConfig(vocab_size=vocab_size, n_positions=180,
                          n_ctx=180, n_embd=128, n_layer=30, n_head=8)
-    player2 = Player(config, "models/q1/q1_15000.pt",
+    player1 = Player(config, "models/useful/q1/q1_15000.pt",
+                     "assets/moves.json", search="sample")  # assume to be white
+    config = ModelConfig(vocab_size=vocab_size, n_positions=180,
+                         n_ctx=180, n_embd=128, n_layer=30, n_head=8)
+    player2 = Player(config, "models/useful/q1/q1_15000.pt",
                      "assets/moves.json", search="minimax",
-                     depth = 1)  # assume to be white
+                     depth = 2)  # assume to be black
 
-    for round in trange(100):
+    for round in trange(1):
         print(f"Starting round: {round}")
         game = GameEngine()
         pgn_writer = chess.pgn.Game()
@@ -457,10 +466,10 @@ if __name__ == "__main__":
                 else:
                     m, v, c = player2.move(game)
                     p = 0
-                # print(mv, "|", m, v, c)
+                print(mv, "|", m, v, c)
                 done, res = game.step(m)
                 pgn_writer_node = pgn_writer_node.add_variation(m)
-                if res != "game" or mv == 50:
+                if res != "game" or mv == 90:
                     print("Game over")
                     break
         except KeyboardInterrupt:
