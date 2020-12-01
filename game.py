@@ -137,26 +137,32 @@ def top_p(x, p = 0.98):
 
 
 ################################################
-####### Tree ###################################
+####### Tree Helpers ###########################
 ################################################
 class Node():
-    def __init__(self, value, move, p):
-        self.value = value
+    def __init__(self, value, move, p, b):
+        """
+        [GAME] m1, m2, m3, m4, m5, m6, m7, m8 ---> s = {a0 ... a8}
+        value = model(a0 ... a8;a9) = q(s,a) # assume I am right
+        """
+        self.value = value # is actually the action value
         self.move = move
-        self.children = []  # initialise with a list
-        self.prior = p # this is the probability that policy network gives
+        self.children = [] # initialise with a list
 
-    @property
-    def terminal(self):
-        return len(self.children) == 0
-
+        self.state = [str(x) for x in b.move_stack] # state at which this action was taken
+        self.nsb = sum([1 for _ in b.legal_moves])
+        self.n = 1 # because first time initialisation means that model came here
+        self.p = p # prior
+        
+        self.update = False
+        
     @property
     def total_nodes(self):
         n = 1
         for c in self.children:
             n += c.total_nodes
         return n
-
+    
     def all_children(self):
         c = []
         if self.children:
@@ -165,16 +171,27 @@ class Node():
         else:
             c = [self]
         return c
+    
+    def update_q(self):
+        assert self.update is False, "Value already updated, calling multiple times can cause an issue"
+        for c in self.children:
+            c.update_q()
+        const = 1.25 + np.log(1 + (1 + self.nsb)/19652) * (np.sqrt(self.nsb) / (1+self.n))
+        self.value = self.value + self.p * const
 
+    @property
+    def terminal(self):
+        return len(self.children) == 0
+    
     def __eq__(self, n):
         return self.move == n.move
-
+    
     def __len__(self):
         return len(self.children)
 
     def __repr__(self):
-        return f"<Move '{self.move[:4]}' ({self.value:.3f}) {len(self)} Child>"
-
+        return f"<Move '{self.move[:4]}'; v={self.value:.3f} c={len(self)}; n={self.n}; s={len(self.state)} nsb={self.nsb} p={self.p:.3f}>"
+    
     def __str__(self, level=0):
         ret = "\t"*level+repr(self)+"\n"
         for child in self.children:
@@ -185,7 +202,7 @@ class Node():
     def s(self):
         return self.__repr__()
 
-def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, mv_probs = None, verbose = False):
+def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, mv_probs = None, verbose = False, p = 0.98):
     """Take one step into the future and update root's children + return the possible futures for those child"""
     if mv_ids is not None:
         assert mv_probs is not None, "Provide probability as well"
@@ -194,6 +211,7 @@ def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, mv_probs = None, v
     if mv_ids is None:
         # special handling for firstm move
         mv_ids = [vocab[str(x)[:4]] for x in b.legal_moves] # valid moves
+        mv_probs = np.ones(len(mv_ids), dtype=np.float) / len(mv_ids)
     
     if verbose:
         print("Given Root:", root.s, "played on board:", b.fen(), [inv_vocab[x] for x in mv_ids])
@@ -221,7 +239,7 @@ def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, mv_probs = None, v
 
         # now get probability distribution for for these legal moves and determine the top ones
         lgt_mv = softmax(lgt_mv[future_legal])
-        lgt_mv_idx = top_p(lgt_mv.reshape(1, len(lgt_mv)), p=0.98)  # [1, N]
+        lgt_mv_idx = top_p(lgt_mv.reshape(1, len(lgt_mv)), p=p)  # [1, N]
         future_legal = [future_legal[i] for i in lgt_mv_idx[0]]
         lgt_mv_probs = [lgt_mv[i] for i in lgt_mv_idx[0]]
         if verbose:
@@ -230,7 +248,7 @@ def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, mv_probs = None, v
         all_possible_future_moves_probs.append(lgt_mv_probs)
 
         # add this child to the root
-        root.children.append(Node(v_mv[0], inv_vocab[mv], mvp))
+        root.children.append(Node(value=v_mv[0], move=inv_vocab[mv], p=mvp, b=bfuture))
     if verbose:
         print("Completed adding one step future to", root.s, [len(x) for x in all_possible_future_moves], "\n\n")
     return all_possible_future_moves, all_possible_future_moves_probs
@@ -283,6 +301,10 @@ def update_node_bonus(root_node):
 
     return root_node
 
+
+################################################
+####### Search #################################
+################################################
 
 def minimax(node, depth, _max = False):
     """
@@ -427,14 +449,23 @@ class Player():
 
         if self.search == "minimax": # use a minimax method to determine the best possible move
             mv = '[GAME]' if not b.move_stack else str(b.move_stack[-1])[:4] # new game handle
-            root_node = Node(value = value, move = mv)
+            root_node = Node(value = value, move = mv, p = 0., b = b)
 
             # generate tree for this node
             _st = time()
             # print("\nStarting tree generation ...", end = " ")
-            generate_tree(model=model, depth=self.depth, board=b, root_node=root_node, vocab=vocab, inv_vocab=inv_vocab, verbose = False)
+            generate_tree(
+                model=model,
+                depth=self.depth,
+                board=b,
+                root_node=root_node,
+                vocab=vocab,
+                inv_vocab=inv_vocab,
+                verbose = False,
+            )
+            root_node.update_q()
             # print(f"Completed in {time() - _st:.4f}s. {root_node.total_nodes - 1} nodes evaluated")
-            root_node = update_node_bonus(root_node)
+            # root_node = update_node_bonus(root_node)
 
             # now take the greedy move that maximises the value
             sorted_moves = sorted([
@@ -442,8 +473,10 @@ class Player():
                     for c in root_node.children
                 ], key = lambda x: x[1]
             ) # Node object
-            value = sorted_moves[-1][1]
-            move = Move(sorted_moves[-1][0].move)
+            move_node = sorted_moves[-1][0]
+            value = move_node.value
+            move = Move(move_node.move)
+            conf = move_node.p
 
         elif self.search == "sample":
             # no searching, make a choice based on probability distribution
@@ -504,9 +537,10 @@ if __name__ == "__main__":
                 print(mv, "|", m, v, c)
                 done, res = game.step(m)
                 pgn_writer_node = pgn_writer_node.add_variation(m)
-                if res != "game" or mv == 90:
+                if res != "game" or mv == 25:
                     print("Game over")
                     break
         except KeyboardInterrupt:
             break
+        print("Saving...")
         print(pgn_writer, file=open("auto_tournaments_search_d1.pgn", "a"), end="\n\n")
