@@ -7,11 +7,12 @@ and all the operations are then used for
 import json
 import chess
 import chess.pgn
-import torch
 import numpy as np
 from tqdm import trange
 from time import time
-import torch.nn.functional as F
+
+import torch
+from torch import Tensor
 from model import BaseHFGPT, ModelConfig
 
 
@@ -20,6 +21,53 @@ def Move(x):
     if not x[-1].isdigit():
         x = x[:-1] + "q"
     return chess.Move.from_uci(x)
+
+
+def get_mv_ids(b, vocab):
+    return [vocab["[GAME]"]] + [vocab[str(x)[:4]] for x in b.move_stack]
+
+
+def check_board_state(b):
+    done = False
+    res = "game"
+    # draw results
+    if b.is_stalemate():  # stalemate
+        print("Stalemate")
+        done = True
+        res = "draw"
+
+    elif b.can_claim_threefold_repetition():
+        print("Threefold repetition claimed")
+        done = True
+        res = "draw"
+
+    elif b.can_claim_fifty_moves():
+        print("Fifty Moves claimed")
+        done = True
+        res = "draw"
+
+    elif b.is_fivefold_repetition():
+        print("Fivefold repetition")
+        done = True
+        res = "draw"
+
+    elif b.is_seventyfive_moves():
+        print("SeventyFive Moves")
+        done = True
+        res = "draw"
+
+    elif b.is_insufficient_material():
+        print("Insufficient Material")
+        done = True
+        res = "draw"
+
+    # win result
+    elif b.is_checkmate():
+        print("Checkmate")
+        done = True
+        res = "win"
+    return done, res
+
 
 
 ################################################
@@ -202,6 +250,27 @@ class Node():
     def s(self):
         return self.__repr__()
 
+
+def one_future(mv, mvp, lgt_mv, v_mv, vocab, inv_vocab, b, p = 0.98, verbose = False):
+    if verbose:
+        print("Applied", inv_vocab[mv], "on board", b.fen(), end = " ")
+    # push board to one future and determine what are the legal moves
+    bfuture = b.copy()
+    bfuture.push(Move(inv_vocab[mv]))
+    if verbose:
+        print("--> to get board", bfuture.fen())
+    future_legal = [vocab[str(x)[:4]] for x in bfuture.legal_moves] # valid futures
+
+    # now get probability distribution for for these legal moves and determine the top ones
+    lgt_mv = softmax(lgt_mv[future_legal])
+    lgt_mv_idx = top_p(lgt_mv.reshape(1, len(lgt_mv)), p=p)  # [1, N]
+    future_legal = [future_legal[i] for i in lgt_mv_idx[0]]
+    lgt_mv_probs = [lgt_mv[i] for i in lgt_mv_idx[0]]
+    if verbose:
+        print("Using Futures", [inv_vocab[x] for x in future_legal], future_legal)
+    return future_legal, lgt_mv_probs, Node(value=v_mv[0], move=inv_vocab[mv], p=mvp, b=bfuture)
+
+
 def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, mv_probs = None, verbose = False, p = 0.98):
     """Take one step into the future and update root's children + return the possible futures for those child"""
     if mv_ids is not None:
@@ -227,28 +296,13 @@ def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, mv_probs = None, v
     all_possible_future_moves_probs = []
     if verbose:
         print("\nEntering Future possibilites determiner...")
+    
     for mv, mvp, lgt_mv, v_mv in zip(mv_ids, mv_probs, logits, values):
-        if verbose:
-            print("Applied", inv_vocab[mv], "on board", b.fen(), end = " ")
-        # push board to one future and determine what are the legal moves
-        bfuture = b.copy()
-        bfuture.push(Move(inv_vocab[mv]))
-        if verbose:
-            print("--> to get board", bfuture.fen())
-        future_legal = [vocab[str(x)[:4]] for x in bfuture.legal_moves] # valid futures
-
-        # now get probability distribution for for these legal moves and determine the top ones
-        lgt_mv = softmax(lgt_mv[future_legal])
-        lgt_mv_idx = top_p(lgt_mv.reshape(1, len(lgt_mv)), p=p)  # [1, N]
-        future_legal = [future_legal[i] for i in lgt_mv_idx[0]]
-        lgt_mv_probs = [lgt_mv[i] for i in lgt_mv_idx[0]]
-        if verbose:
-            print("Using Futures", [inv_vocab[x] for x in future_legal], future_legal)
+        # make one step in the future and return the best value
+        future_legal, lgt_mv_probs, node = one_future(mv, mvp, lgt_mv, v_mv, vocab, inv_vocab, b, p =p, verbose =verbose)
         all_possible_future_moves.append(future_legal)
         all_possible_future_moves_probs.append(lgt_mv_probs)
-
-        # add this child to the root
-        root.children.append(Node(value=v_mv[0], move=inv_vocab[mv], p=mvp, b=bfuture))
+        root.children.append(node)
     if verbose:
         print("Completed adding one step future to", root.s, [len(x) for x in all_possible_future_moves], "\n\n")
     return all_possible_future_moves, all_possible_future_moves_probs
@@ -300,6 +354,89 @@ def update_node_bonus(root_node):
         c.n = cntr[c.move]
 
     return root_node
+
+
+################################################
+####### Monte Carlo Tree Search ################
+################################################
+
+def best_move_for_this_board(model, root_node, b, logits_kp1, mv_ids, vocab, inv_vocab, v=False):
+    # I need to find what the are the values for taking all legal actions at (k+2)
+    mv_batched = np.asarray([[0] + [vocab[str(x)[:4]] for x in b.move_stack] + [l]
+                             for l in mv_ids])[:, :model.config.n_ctx]
+    with torch.no_grad():  # whatever can be played and what is the prediction till now
+        logits, values = model(input_ids=Tensor(mv_batched).long())
+        logits_kp2 = logits[0, -1].numpy()  # [1, N] # at k+2
+        values_kp2 = values[:, -1].tolist()  # [1, 1]
+
+    if v:
+        print("--->>>", logits_kp2.shape, len(values_kp2))
+
+    # now I have what are the best moves here
+    for probability_of_taking_move, value_of_taking_this_move, mv in zip(logits_kp1, values_kp2, mv_ids):
+        bcopy = b.copy()
+        root_node.children.append(Node(
+            value=value_of_taking_this_move[0],
+            move=inv_vocab[mv],
+            p=probability_of_taking_move,
+            b=bcopy,
+            color=root_node.inv_color,
+            rc=root_node.rc
+        ))
+
+    # the action to be taken is determined by the node values
+    root_node.update_q()
+    best_node = sorted(root_node.children, key=lambda x: x.value)[-1]
+    move = Move(best_node.move)
+    return move, best_node
+
+
+def expand_tree(model, root_node, b, depth, vocab, inv_vocab, nodes_taken, v=False):
+    if v:
+        print(f"{depth}, {root_node.s}, {len(nodes_taken)}")
+
+    # get policy: get the possible future moves (k+1)
+    mvs = get_mv_ids(b, vocab)  # whatever has been played till now
+    legal_moves = [vocab[str(x)[:4]] for x in b.legal_moves]
+    with torch.no_grad():  # whatever can be played and what is the prediction till now
+        logits, values = model(input_ids=Tensor(mvs).view(1, len(mvs)).long())
+        logits_kp1 = logits[0, -1].numpy()  # [1, N]
+        values_kp1 = values[0, -1].item()  # [1, 1]
+        logits_kp1 = softmax(logits_kp1[legal_moves])
+
+    # selection -> play the best move till now
+    move, child_node_to_take = best_move_for_this_board(
+        model=model, root_node=root_node,
+        b=b, logits_kp1=logits_kp1, mv_ids=legal_moves,
+        v=v, vocab=vocab, inv_vocab=inv_vocab,
+    )
+    bfuture = b.copy()
+    bfuture.push(move)
+    nodes_taken.append(child_node_to_take)
+
+    # check for terminal state
+    done, res = check_board_state(bfuture)
+    if done:
+        if res == "draw":
+            child_node_to_take.value = 0
+        else:
+            value = 1 if child_node_to_take.color == child_node_to_take.rc else -1
+            child_node_to_take.value = value
+    else:
+        if depth > 1:
+            # expansion
+            expand_tree(model=model, root_node=child_node_to_take, b=bfuture, depth=depth -
+                        1, vocab=vocab, inv_vocab=inv_vocab, nodes_taken=nodes_taken, v=v)
+
+
+def backup(nodes_taken, discount_factor = 0.99):
+    for i, n in enumerate(nodes_taken[:-1]):
+        # bsv = r1 + g1*r_2 + g2*r_3 + g3*r_4
+        bootstrap = 0
+        for j, n2 in enumerate(nodes_taken[i:]):
+            bootstrap += (discount_factor**j) * n2.value
+        n.value = (n.n*n.value + bootstrap) / (n.n + 1)
+        n.n = n.n + 1
 
 
 ################################################
@@ -493,6 +630,9 @@ class Player():
             value = None
             conf = None
 
+        if value < -0.8:
+            move = "resign"
+
         return move, value, conf
 
 
@@ -535,11 +675,15 @@ if __name__ == "__main__":
                     m, v, c = player2.move(game)
                     p = 0
                 print(mv, "|", m, v, c)
-                done, res = game.step(m)
-                pgn_writer_node = pgn_writer_node.add_variation(m)
-                if res != "game" or mv == 25:
-                    print("Game over")
-                    break
+
+                if m != "resign":
+                    done, res = game.step(m)
+                    pgn_writer_node = pgn_writer_node.add_variation(m)
+                    if res != "game" or mv == 25:
+                        print("Game over")
+                        break
+                else:
+                    print("Player has resigned")
         except KeyboardInterrupt:
             break
         print("Saving...")
