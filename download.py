@@ -6,11 +6,12 @@ import sys
 import json
 import wget
 import time
-import requests
 import chess
+import subprocess
+import multiprocessing
 from chess import pgn
 from glob import glob
-from tqdm import trange, tqdm_notebook
+from tqdm import trange
 from zipfile import ZipFile
 
 
@@ -49,27 +50,29 @@ def load_game_count(files):
 def parse_and_save_data(files, save_after, pid):
     """parse the pgn files and save the data after `save_after` no. of games have been processed
     """
+    print(pid, "----", files)
     seqs = []
     rseq = []
     cntr = 0
     fcntr = 0
-    files_pbar = trange(len(files), ncols = 100)
+    # files_pbar = trange(len(files), ncols = 100)
     game_count = 0
     game_count_loaded = 0
-    for i in files_pbar:
+    for i in range(len(files)):
+        print(pid, "-- Opening -->>>", files[i])
         fpath = files[i]
         all_lines = []
-        files_pbar.set_description(f"Opening file: {fpath}")
+        # files_pbar.set_description(f"Opening file: {fpath}")
         with open(fpath, 'r', encoding = "latin") as f:
             games = f.read()
         games2 = re.sub(r"\[.*\]\s", "", games)
         game_strings = games2.split("\n\n")
         game_strings = [re.sub(r"\n", " ", gs) for gs in game_strings]
         game_count += len(game_strings)
-        gs_pbar = trange(len(game_strings), ncols = 100)
-        for j in gs_pbar:
+        # gs_pbar = trange(len(game_strings), ncols = 100)
+        for j in range(len(game_strings)):
             try:
-                gs_pbar.set_description(f"Processing game: #{j}")
+                # gs_pbar.set_description(f"Processing game: #{j}")
                 gs = game_strings[j].strip()
                 try:
                     cg = pgn.read_game(io.StringIO(gs.decode("utf-8")))
@@ -90,8 +93,10 @@ def parse_and_save_data(files, save_after, pid):
                 print(f"↗️ Can't open because: {e}")
 
             if cntr % save_after == 0:
-                with open(f"chess_lm_{fcntr}_{pid}.txt", "w") as m, open(f"chess_res_{fcntr}_{pid}.txt", "w") as r:
-                    print("Saving Files...")
+                lm_file = f"data/chess_lm_{fcntr}_{pid}.txt"
+                res_file = f"data/chess_res_{fcntr}_{pid}.txt"
+                with open(lm_file, "w") as m, open(res_file, "w") as r:
+                    print("Saving Files...", lm_file, res_file)
                     m.write("\n".join(seqs))
                     r.write(" ".join(list(map(str, rseq))))
 
@@ -100,56 +105,57 @@ def parse_and_save_data(files, save_after, pid):
                 rseq = []
                 fcntr += 1
 
+        print(pid, "---- Removing file ...", fpath)
         os.remove(fpath)
 
     if len(seqs):
-        with open(f"chess_lm_{fcntr}.txt", "w") as m, open(f"chess_res_{fcntr}.txt", "w") as r:
-            print("Saving Files...")
+        lm_file = f"data/chess_lm_{fcntr}_{pid}.txt"
+        res_file = f"data/chess_res_{fcntr}_{pid}.txt"
+        with open(lm_file, "w") as m, open(res_file, "w") as r:
+            print("Saving Files...", lm_file, res_file)
             m.write("\n".join(seqs))
             r.write(" ".join(list(map(str, rseq))))
+
 
         game_count_loaded += len(seqs)
         seqs = []
         rseq = []
-        fcntr += 1    
+        fcntr += 1
 
-    return game_count, game_count_loaded
-
-
-# def multiprocessing_parsing_wrapper(files, save_after):
+    print(f"Process: {pid} Done!")
 
 
+def multiprocessing_parsing_wrapper(files, save_after):
+    WORKERS = min(20, len(files))
+    process_list = []
+    
+    files_bkts = [[] for _ in range(WORKERS)]
+    for i,f in enumerate(files):
+        i = i % WORKERS # to put in proper bucket
+        files_bkts[i].append(f)
 
+    for pid in range(WORKERS):
+        process_list.append(multiprocessing.Process(
+            target = parse_and_save_data,
+            args = (files_bkts[pid], save_after, pid,)
+        ))
+        process_list[-1].start()
+
+    for p in process_list:
+        p.join()
 
 
 # ----------------------------------------------- #
 
 if sys.argv[1] == "-d":
-    # get the links and download using HTTP
     links = open('assets/links2000.txt').readlines()
-
     os.makedirs("data/", exist_ok = True)
-    
     download_start_time = time.time()
-
     zippaths = []
     print(f"Downloading {len(links)} Zip Files ...")
     pbar = trange(len(links))
     for i in pbar:
         l = links[i]
-        pbar.set_description(f"Downloading {l}")
-        # zp = './' + l.split('/')[-1].strip()
-        # if os.path.exists(zp):
-        #     print(f"Skipping ... {l}")
-        #     continue
-
-        # initially I used requests but after introducin FICS database which had
-        # some file > 3GB the requests would have shat the bed so now I am using
-        # wget
-        # data = requests.get(l.strip())
-        # with open(zp, "wb") as f:
-        #     f.write(data.content)
-
         zp = wget.download(l.strip(), "data")
         zippaths.append(zp)
 
@@ -158,6 +164,7 @@ if sys.argv[1] == "-d":
     res = time.strftime("%H:%M:%S", ty_res)
     print(f"Download completed in {res}")
 
+    # from pgnmentor
     print("Extracting Zip Files ...")
     zip_start_time = time.time()
     zipfiles = glob("data/*.zip")
@@ -168,6 +175,15 @@ if sys.argv[1] == "-d":
         zf.extractall('.')
         zf.close()
         os.remove(f)
+        
+    # FICS uses .bz2 file
+    print("Extracting Zip Files ...")
+    zip_start_time = time.time()
+    zipfiles = glob("data/*.bz2")
+    print(f"No. of zip files: {len(zipfiles)}")
+    for i in trange(len(zipfiles)):
+        f = zipfiles[i]
+        subprocess.run(["bzip2", "-d", f])
 
     ty_res = time.gmtime(time.time() - zip_start_time)
     res = time.strftime("%H:%M:%S", ty_res)
@@ -179,9 +195,7 @@ elif sys.argv[1] == "-p":
     parsing_start_time = time.time()
     pgnfiles = glob('data/*.pgn')
     print(f"Found {len(pgnfiles)} files.")
-    game_count, game_count_loaded = parse_and_save_data(pgnfiles, 100000) # n*~36MB files
-    print(f"Found {game_count} games")
-    print(f"Loaded {game_count_loaded} ({game_count_loaded/game_count * 100}% coverage)")
+    multiprocessing_parsing_wrapper(pgnfiles, 100000) # n*~36MB files
     ty_res = time.gmtime(time.time() - parsing_start_time)
     res = time.strftime("%H:%M:%S", ty_res)
     print(f"Parsing completed in {res}")
