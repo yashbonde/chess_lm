@@ -34,12 +34,19 @@ class BaseHFGPT(nn.Module):
         self.config = config
         self.gpt = GPT2Model(config)
         self.policy_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
-        self.value_head = nn.Linear(config.n_embd, 1)
+        # self.value_head = nn.Linear(config.n_embd, 1)
+        self.value_head = nn.Sequential(*[
+            nn.Linear(config.n_embd, config.n_embd // 2),
+            nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon),
+            nn.ReLU(),
+            nn.Linear(config.n_embd // 2),
+            nn.Tanh()
+        ])
 
     def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
         x = self.gpt(input_ids, return_dict = True, **gptkwargs)
         logits = self.policy_head(x.last_hidden_state)
-        values = torch.tanh(self.value_head(x.last_hidden_state))
+        values = self.value_head(x.last_hidden_state)
         out = (logits, values)
         if loss is not None and value_targets is not None:            
             # Categorical cross entropy loss worked best for policy
@@ -84,29 +91,36 @@ class Trainer:
         model, config = self.model, self.config
         train_data = self.train_dataset
         test_data = self.test_dataset
+        num_batches = len(train_data) // config.batch_size + int(len(train_data) % config.batch_size != 0)
+        total_steps = num_batches * config.num_epochs
+        
+        # create step functions
         optimizer = torch.optim.Adam(
             model.parameters(),
             lr = config.learning_rate,
             betas = config.betas
         )
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, total_steps = total_steps, max_lr=0.05)
         
         print(len(train_data), len(test_data))
 
         with SummaryWriter(log_dir=config.tb_path, flush_secs=20) as tb:
             # this is second method for creating a training loop
-            num_batches = len(train_data) // config.batch_size + int(len(train_data) % config.batch_size != 0)
-            total_steps = num_batches * config.num_epochs
             pbar_train = trange(total_steps, ncols=100)
             dl_train = DataLoader(dataset=train_data, pin_memory=True, batch_size=config.batch_size, shuffle=train_data.shuffle)
             prev_train_loss = 100000 # what was the training loss in previos testing cycle
             no_loss_steps = 0 # no of steps since there was devrease in the loss
             break_training = False
             train_losses = [-1]
+            train_acc = [-1]
             model.train()
+            
             for gs, d in zip(pbar_train, dl_train):
-                # total steps is now the primary loss
+                # total steps is now the primary iteration method
+                d = {k:v.to(self.device) for k,v in d.items()}
+                
                 epoch = gs // config.batch_size
-                pbar_train.set_description(f"[TRAIN] GS: {gs}, Epoch: {epoch}, Loss: {round(train_losses[-1], 5)}")
+                pbar_train.set_description(f"[TRAIN] GS: {gs}, Epoch: {epoch}, Loss: {round(train_losses[-1], 5)}, Acc: {train_acc[-1]}")
 
                 # get model results
                 (policy, values, loss) = model(loss=True, **d)
@@ -117,18 +131,24 @@ class Trainer:
 
                 # calculate move accuracy
                 policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
-                move_acc = sum(d["input_ids"][:, 1:].contiguous().view(-1), torch.argmax(policy, dim=-1)).item()
+                policy = torch.argmax(policy, dim=-1)
+                targets = d["input_ids"][:, 1:].contiguous().view(-1)
+                move_acc = sum(targets == policy).item()
+                move_acc /= targets.size(0)
+                train_acc.append(move_acc)
 
                 # add to tensorboard
-                tb.add_scalar("test/loss_total", loss_total.item(), global_step=gs, walltime=time.time())
-                tb.add_scalar("test/loss_policy", loss_policy.item(), global_step=gs, walltime=time.time())
-                tb.add_scalar("test/loss_value", loss_value.item(), global_step=gs, walltime=time.time())
-                tb.add_scalar("test/move_acc", move_acc, global_step=gs, walltime=time.time())
+                tb.add_scalar("train/loss_total", loss_total.item(), global_step=gs, walltime=time.time())
+                tb.add_scalar("train/loss_policy", loss_policy.item(), global_step=gs, walltime=time.time())
+                tb.add_scalar("train/loss_value", loss_value.item(), global_step=gs, walltime=time.time())
+                tb.add_scalar("train/move_acc", move_acc, global_step=gs, walltime=time.time())
+                tb.add_scalar("train/lr", scheduler.get_last_lr()[0], global_step=gs, walltime=time.time())
 
                 # backprop
                 loss_total.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
                 optimizer.step()
+                scheduler.step()
 
                 # test if time has come
                 if gs > 0 and gs % config.test_every == 0:
@@ -140,8 +160,10 @@ class Trainer:
                     num_batches = len(test_data) // config.batch_size + int(len(test_data) % config.batch_size != 0)
 
                     test_losses = []
+                    test_acc = []
                     pbar_test = trange(num_batches, ncols = 100)
                     for it, d in zip(pbar_test, dl_test):
+                        d = {k:v.to(self.device) for k,v in d.items()}
                         pbar_test.set_description(f"[VAL] Global ({gs}) -> [{it + 1}/{num_batches}]")
 
                         with torch.no_grad():
@@ -154,7 +176,11 @@ class Trainer:
 
                             # calculate move accuracy
                             policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
-                            move_acc = sum(d["input_ids"][:, 1:].contiguous().view(-1), torch.argmax(policy, dim=-1)).item()
+                            policy = torch.argmax(policy, dim=-1)
+                            targets = d["input_ids"][:, 1:].contiguous().view(-1)
+                            move_acc = sum(targets == policy).item()
+                            move_acc /= targets.size(0)
+                            test_acc.append(move_acc)
 
                             # add to tensorboard
                             tb.add_scalar("test/loss_total", loss_total.item(), global_step=gs, walltime=time.time())
@@ -164,7 +190,8 @@ class Trainer:
 
                     # now testing is complete so see the results, save or stop if needed
                     losses = np.mean(test_losses)
-                    print(f"Loss: {losses}", end = " ")
+                    test_acc = np.mean(test_acc)
+                    print(f"Loss: {losses:.3f}; Acc: {test_acc:.3f}", end = " ")
 
                     if prev_train_loss > losses:
                         prev_train_loss = losses

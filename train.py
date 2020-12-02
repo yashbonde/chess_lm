@@ -3,10 +3,10 @@
 
 import os
 from argparse import ArgumentParser
-from model import DataConfig, ChessData, ChessDataInMemory, ModelConfig, BaseHFGPT, TrainerConfig, Trainer, get_datasets
+from model import DataConfig, ModelConfig, BaseHFGPT, TrainerConfig, Trainer, get_datasets
 
 # load user args
-args = ArgumentParser(description="Train GPT2 model on t2sql corpus")
+args = ArgumentParser(description="Train a GPT2 model to play chess on moves only")
 
 # data args
 args.add_argument("--lmtrain", type=str, default = "data/chessD2.hdf5", help="path to train_lm file")
