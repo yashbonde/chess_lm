@@ -148,6 +148,7 @@ def multiprocessing_parsing_wrapper(files, save_after):
 # ----------------------------------------------- #
 
 if sys.argv[1] == "-d":
+    # download files and unzip
     links = open('assets/links2000.txt').readlines()
     os.makedirs("data/", exist_ok = True)
     download_start_time = time.time()
@@ -189,37 +190,65 @@ if sys.argv[1] == "-d":
     res = time.strftime("%H:%M:%S", ty_res)
     print(f"Unzipping completed in {res}")
 
-# NOTE: that the meta information `game_count`, `game_count_loaded` was added after it was run
-# please use it on small file set before running on the complete system
+
 elif sys.argv[1] == "-p":
+    # parse files
     parsing_start_time = time.time()
     pgnfiles = glob('data/*.pgn')
     print(f"Found {len(pgnfiles)} files.")
-    multiprocessing_parsing_wrapper(pgnfiles, 100000) # n*~36MB files
+    multiprocessing_parsing_wrapper(pgnfiles, 1000000)
     ty_res = time.gmtime(time.time() - parsing_start_time)
     res = time.strftime("%H:%M:%S", ty_res)
     print(f"Parsing completed in {res}")
 
 
-elif sys.argv[1] == "-s":
-    size = float(sys.argv[2]) # size percentage
-    with open("data/agg_mv.txt", "r") as f:
-        cntr = 0
-        for _ in f:
-            cntr += 1
+elif sys.argv[1] == "-m":
+    # merge files and split into testing and training
+    split = float(sys.argv[2]) # split ratio
+    
+    all_files = glob("./data/*.txt")
+    by_order = {}
+    for f in all_files:
+        name = "".join(re.findall("\d+_\d+", f))
+        if not name:
+            continue
+        mode = "res" if "res" in f else "lm"
+        if name not in by_order:
+            by_order[name] = {mode: f}
+        else:
+            by_order[name].update({mode: f})
+     
+    # we create exhaustive list, this will also help in determining the dataloading procedure to use
+    all_sequences = []
+    all_results = []
+    
+    # now we open files one by one
+    total_moves = 0
+    for name in by_order:
+        print("Reading files...", name)
+        with open(by_order[name]["lm"], "r") as lm, open(by_order[name]["res"], "r") as res:
+            lm = lm.read()
+            res = res.read().split("\n")
+            # uncomment below to see the number of moves
+            # total_moves += len(re.findall("\s", lm)) - len(res)
+            all_sequences.extend(lm.split("\n"))
+            all_results.extend(res)
 
-    print(f"Total game count: {cntr}")
-    top_k = int(cntr * size)
-    print(f"Writing {top_k} samples")
-    with open("data/agg_mv.txt", "r") as f1, open(f"data/agg_mv_{size}%.txt", "r") as f2:
-        strings = []
-        for i,l in enumerate(f):
-            if i == cntr:
-                break
-            strings.append(l)
-
-        print(f"Writing in file: 'data/agg_mv_{size}%.txt'")
-        f2.write("".join(strings))
+    print("============= Total Games:", len(all_sequences))
+    print("============= Total Moves:", total_moves)
+            
+    # now create a split
+    test_idx = int(len(all_sequences) * split)
+    print("TEST IDX", test_idx)
+    print("Writing ---> data/train_lm.txt, data/test_lm.txt")
+    with open("data/train_lm.txt", "w") as train_lm, open("data/test_lm.txt", "w") as test_lm:
+        train_lm.write("\n".join(all_sequences[test_idx:]))
+        test_lm.write("\n".join(all_sequences[:test_idx]))
+        
+    print("Writing ---> data/train_res.txt, data/test_res.txt")
+    with open("data/train_res.txt", "w") as train_lm, open("data/test_res.txt", "w") as test_lm:
+        train_lm.write("\n".join(all_results[test_idx:]))
+        test_lm.write("\n".join(all_results[:test_idx]))
 
 
 # ----------------------------------------------- #
