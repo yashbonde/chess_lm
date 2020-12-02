@@ -9,10 +9,9 @@ from model import DataConfig, ChessData, ChessDataInMemory, ModelConfig, BaseHFG
 args = ArgumentParser(description="Train GPT2 model on t2sql corpus")
 
 # data args
-args.add_argument("--lmtrain", type=str, default = "agg_mv.txt", help="path to train_lm file")
-args.add_argument("--lmtest", type=str, default = None, help="path to test_lm file")
-args.add_argument("--res", type=str, default = "agg_res.txt", help="path to res file")
-args.add_argument("--m2id", type=str, default = "moves.json", help="path to move_to_id json")
+args.add_argument("--lmtrain", type=str, default = "data/chessD2.hdf5", help="path to train_lm file")
+args.add_argument("--res", type=str, default = "data/all_res.txt", help="path to res file")
+args.add_argument("--m2id", type=str, default = "assets/moves.json", help="path to move_to_id json")
 
 args.add_argument("--maxlen", type = int, default = 85, help = "maximum length")
 args.add_argument("--ds", type = str, default = "full", help = "to use in memory or iterable Dataset [full / iter]")
@@ -21,17 +20,17 @@ args.add_argument("--n_embd", type = int, default = 128, help = "embedding dim")
 args.add_argument("--n_layer", type = int, default = 30, help = "number of layers of the model")
 args.add_argument("--n_head", type = int, default = 8, help = "number of heads for MHA")
 
-args.add_argument("--lr", type = int, default = 0.0001, help = "learning rate")
+args.add_argument("--lr", type = int, default = 0.005, help = "learning rate")
 args.add_argument("--beta1", type = int, default = 0.9, help = "Adam.beta1")
 args.add_argument("--beta2", type = int, default = 0.95, help = "Adam.beta2")
 
 # train args
-args.add_argument("--batch_size", type=int, default=350, help="batch size")
-args.add_argument("--split", type=float, default=0.05, help="ratio of data to use as testing")
+args.add_argument("--batch_size", type=int, default=270, help="batch size")
+args.add_argument("--split", type=float, default=0.01, help="ratio of data to use as testing")
 args.add_argument("--num_epochs", type=int, default=1, help="Number of epochs to train / finetune")
 args.add_argument("--save_folder", type=str, default="models", help="Folder to save model to")
 args.add_argument("--model", type=str, default="cgpt", help="Saved model to have filepath `<model>.pt`")
-args.add_argument("--test_every", type=int, default=100, help="Test after these global steps")
+args.add_argument("--test_every", type=int, default=500, help="Test after these global steps")
 args.add_argument("--patience", type=int, default=3, help="Early stopping partience value")
 args = args.parse_args()
 
@@ -40,6 +39,10 @@ os.makedirs(args.save_folder, exist_ok=True)  # make folder if needed
 model_folder = os.path.join(args.save_folder, args.model)
 os.makedirs(args.save_folder, exist_ok=True)  # make folder if needed
 model_path = os.path.join(model_folder, args.model + ".pt")
+
+if args.lmtrain[-4:] == "hdf5":
+    print("Using HDF5 data")
+    assert args.maxlen == 85, "using hdf5 means you have harcoded len"
 
 dataConfig = DataConfig(
     lm=args.lmtrain,
@@ -62,14 +65,14 @@ model = BaseHFGPT(modelConfig)
 print(f"Model Size: {sum(dict((p.data_ptr(), p.numel()) for p in model.parameters()).values())}")
 
 trainerConf = TrainerConfig(
-    max_epochs = args.num_epochs,
+    num_epochs = args.num_epochs,
     batch_size = args.batch_size,
     lr = args.lr,
     betas = (args.beta1, args.beta2),
     tb_path = model_folder,
-    save_every = args.save_every,
+    test_every = args.test_every,
     ckpt_path = model_path,
     patience = args.patience,
 )
-trainer = Trainer(model, dstrain, trainerConf)
+trainer = Trainer(model, dstrain, trainerConf, dstest)
 trainer.train()

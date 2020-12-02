@@ -1,5 +1,6 @@
 """chess lm model + dataset file"""
 
+import h5py
 import json
 import time
 import random
@@ -42,9 +43,9 @@ class BaseHFGPT(nn.Module):
         out = (logits, values)
         if loss is not None and value_targets is not None:            
             # Categorical cross entropy loss worked best for policy
-            logits = logits[:, :-1, :].contiguous().view(-1, logits.size(-1))
+            logits_reshape = logits[:, :-1, :].contiguous().view(-1, logits.size(-1))
             targets = input_ids[:, 1:].contiguous().view(-1)
-            loss_policy = F.cross_entropy(logits, targets)
+            loss_policy = F.cross_entropy(logits_reshape, targets)
 
             # MSE works best for value function
             loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
@@ -88,17 +89,20 @@ class Trainer:
             lr = config.learning_rate,
             betas = config.betas
         )
+        
+        print(len(train_data), len(test_data))
 
         with SummaryWriter(log_dir=config.tb_path, flush_secs=20) as tb:
             # this is second method for creating a training loop
             num_batches = len(train_data) // config.batch_size + int(len(train_data) % config.batch_size != 0)
-            total_steps = num_batches * config.n_epochs
+            total_steps = num_batches * config.num_epochs
             pbar_train = trange(total_steps, ncols=100)
-            dl_train = DataLoader( dataset=test_data, pin_memory=True, batch_size=config.batch_size, shuffle=test_data.shuffle )
+            dl_train = DataLoader(dataset=train_data, pin_memory=True, batch_size=config.batch_size, shuffle=train_data.shuffle)
             prev_train_loss = 100000 # what was the training loss in previos testing cycle
             no_loss_steps = 0 # no of steps since there was devrease in the loss
             break_training = False
             train_losses = [-1]
+            model.train()
             for gs, d in zip(pbar_train, dl_train):
                 # total steps is now the primary loss
                 epoch = gs // config.batch_size
@@ -127,7 +131,8 @@ class Trainer:
                 optimizer.step()
 
                 # test if time has come
-                if gs % config.test_every == 0:
+                if gs > 0 and gs % config.test_every == 0:
+                    model.eval()
                     dl_test = DataLoader(
                         dataset = test_data, pin_memory = True, batch_size = config.batch_size, shuffle=test_data.shuffle
                     )
@@ -161,7 +166,7 @@ class Trainer:
                     losses = np.mean(test_losses)
                     print(f"Loss: {losses}", end = " ")
 
-                    if prev_train_loss < losses:
+                    if prev_train_loss > losses:
                         prev_train_loss = losses
                         no_loss_steps = 0
                         print("... previous loss was larger, updating values")
@@ -173,6 +178,8 @@ class Trainer:
                     
                     if config.patience != -1 and  no_loss_steps == config.patience:
                         break_training = True
+                        
+                    model.train()
 
                 if break_training:
                     print("Stopping training")
@@ -253,7 +260,7 @@ class Trainer:
             #     self.save_checkpoint()
 
 class TrainerConfig:
-    max_epochs = 10
+    num_epochs = 2
     batch_size = 64
     learning_rate = 3e-4
     betas = (0.9, 0.95)
@@ -262,10 +269,11 @@ class TrainerConfig:
     ckpt_path = None
     tb_path = None
     patience = -1
+    test_every = None
 
     def __init__(self, **kwargs):
         self.attrs = [
-            "max_epochs",
+            "num_epochs",
             "batch_size",
             "learning_rate",
             "betas",
@@ -274,6 +282,7 @@ class TrainerConfig:
             "ckpt_path",
             "tb_path",
             "patience",
+            "test_every"
         ]
         for k,v in kwargs.items():
             setattr(self, k, v)
@@ -293,6 +302,7 @@ class FullDatasetPreLoaded(Dataset):
         self.lms = lms
         self.results = results
         self.m2id = m2id
+        self.shuffle = True
 
     def __len__(self):
         return self.lms.shape[0]
@@ -306,13 +316,6 @@ class FullDatasetPreLoaded(Dataset):
 def get_datasets(config, split):
     """This function returns two datasets one for training and another for holdout
     No need to load to different datasets or create a split between them"""
-
-    len_file = 0
-    with open(config.lm, "r") as f:
-        for _ in f:
-            len_file += 1
-    total_len = len_file
-
     with open(config.m2id, "r") as m:
         m2id = json.load(m)
         if "[GAME]" not in m2id:  # only if not found
@@ -320,33 +323,49 @@ def get_datasets(config, split):
             m2id["[GAME]"] = GAME  # new game flag
         else:
             GAME = m2id["[GAME]"]
+    
+    if config.lm[-4:] == "hdf5":
+        # this is the hdf5
+        data = h5py.File(config.lm, "r")
+        lms = data["lms"]
+        results = data["res"]
 
-    # now load the complete dataset in memory
-    with open(config.lm, "r") as flm, open(config.rf, "r") as fres:
-        lms = [] # all the sequences
-        results = [] # all the results
-        print("Loading samples in memory ... this will take some time")
-        for idx, lm, game_res in zip(trange(total_len), flm, fres):
-            # ignore BOS + EOS tags, [GAME] does it for us
-            lm = list(map(lambda x: int(x.strip()), lm.split()))[1:-1]
-            lms.extend([GAME] + lm)
+    else:
+        len_file = 0
+        with open(config.lm, "r") as f:
+            for _ in f:
+                len_file += 1
+        total_len = len_file
 
-            # get the targets for values as [0,res,-res,res,-res...]
-            game_res = float(game_res)
-            res = np.ones(len(lm)) * game_res
-            res[np.arange(1, len(lm), 2)] = -game_res
-            results.extend([0] + res.tolist()) # first will always generate 0
+        # now load the complete dataset in memory
+        with open(config.lm, "r") as flm, open(config.rf, "r") as fres:
+            lms = [] # all the sequences
+            results = [] # all the results
+            print("Loading samples in memory ... this will take some time")
+            for idx, lm, game_res in zip(trange(total_len), flm, fres):
+                # ignore BOS + EOS tags, [GAME] does it for us
+                lm = list(map(lambda x: int(x.strip()), lm.split()))[1:-1]
+                lms.extend([GAME] + lm)
 
-    # now convert this long list to sequence
-    lms = np.array(lms[:-(len(lms) % config.maxlen)]).reshape(-1, config.maxlen)
-    results = np.array(results[:-(len(results) % config.maxlen)]).reshape(-1, config.maxlen)
+                # get the targets for values as [0,res,-res,res,-res...]
+                game_res = float(game_res)
+                res = np.ones(len(lm)) * game_res
+                res[np.arange(1, len(lm), 2)] = -game_res
+                results.extend([0] + res.tolist()) # first will always generate 0
+
+                # used for batch size testing on GPUs, full loading takes tine
+                # if len(results) > 90 * 10000:
+                #    break
+
+        # now convert this long list to sequence
+        lms = np.array(lms[:-(len(lms) % config.maxlen)]).reshape(-1, config.maxlen)
+        results = np.array(results[:-(len(results) % config.maxlen)]).reshape(-1, config.maxlen)
 
     print(f"Moves: {lms.shape}; Results: {results.shape}")
 
-    train_idx = int(split * lms.shape[0])
-    ds_train = FullDatasetPreLoaded(lms[:train_idx], results[:train_idx], m2id)
-    ds_test = FullDatasetPreLoaded(lms[train_idx:], results[train_idx:], m2id)
-
+    test_idx = int(split * lms.shape[0])
+    ds_train = FullDatasetPreLoaded(lms[test_idx:], results[test_idx:], m2id)
+    ds_test = FullDatasetPreLoaded(lms[:test_idx], results[:test_idx], m2id)
     return ds_train, ds_test
 
 

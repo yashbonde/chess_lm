@@ -3,11 +3,13 @@ import io
 import os
 import re
 import sys
+import h5py
 import json
 import wget
 import time
 import chess
 import subprocess
+import numpy as np
 import multiprocessing
 from chess import pgn
 from glob import glob
@@ -239,6 +241,46 @@ elif sys.argv[1] == "-m":
     with open("data/all_lm.txt", "w") as train_lm, open("data/all_res.txt", "w") as train_res:
         train_lm.write("\n".join(all_sequences))
         train_res.write("\n".join(all_results))
+
+
+elif sys.argv[1] == "-c":
+    # compile to .hdf5 file
+    len_file = 0
+    with open("data/all_lm.txt", "r") as f:
+        for _ in f:
+            len_file += 1
+    total_len = len_file
+    GAME = 0
+
+    # now load the complete dataset in memory
+    with open("data/all_lm.txt", "r") as flm, open("data/all_res.txt", "r") as fres:
+        lms = []  # all the sequences
+        results = []  # all the results
+        print("Loading samples in memory ... this will take some time")
+        for idx, lm, game_res in zip(trange(total_len), flm, fres):
+            # ignore BOS + EOS tags, [GAME] does it for us
+            lm = list(map(lambda x: int(x.strip()), lm.split()))[1:-1]
+            lms.extend([GAME] + lm)
+
+            # get the targets for values as [0,res,-res,res,-res...]
+            game_res = float(game_res)
+            res = np.ones(len(lm)) * game_res
+            res[np.arange(1, len(lm), 2)] = -game_res
+            results.extend([0] + res.tolist())  # first will always generate 0
+
+    # create the file
+    hdf = h5py.File("data/chessD2.hdf5", "w")
+
+    # convert to lms and results
+    lms = np.array(lms[:-(len(lms) % 85)]).reshape(-1, 85)
+    results = np.array(results[:-(len(results) % 85)]).reshape(-1, 85)
+
+    hdf.create_dataset("lms", shape=lms.shape, dtype="i", data=lms)
+    hdf.create_dataset("res", shape=results.shape, dtype="i", data=results)
+
+    hfd.close()
+
+
 
 # ----------------------------------------------- #
 
