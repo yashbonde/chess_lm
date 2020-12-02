@@ -15,7 +15,7 @@ from zipfile import ZipFile
 
 
 # loading the information already saved
-m2id = json.load(open('m2id.json', "r"))  # this is our special moves handler
+m2id = json.load(open('assets/moves.json', "r"))  # this is our special moves handler
 results = {
     "1-0": "1",
     '1/2-1/2': "0",
@@ -126,15 +126,15 @@ def parse_and_save_data(files, save_after, pid):
 
 if sys.argv[1] == "-d":
     # get the links and download using HTTP
-    links = open('links.txt').readlines()
+    links = open('assets/links2000.txt').readlines()
 
-    os.makedirs("data/", exists_ok = True)
+    os.makedirs("data/", exist_ok = True)
     
     download_start_time = time.time()
 
     zippaths = []
     print(f"Downloading {len(links)} Zip Files ...")
-    pbar = trange(len(links), ncols = 200)
+    pbar = trange(len(links))
     for i in pbar:
         l = links[i]
         pbar.set_description(f"Downloading {l}")
@@ -197,14 +197,14 @@ elif sys.argv[1] == "-s":
     print(f"Total game count: {cntr}")
     top_k = int(cntr * size)
     print(f"Writing {top_k} samples")
-    with open("data/agg_mv.txt", "r") as f1, open(f"data/agg_mv_{okay size}%.txt", "r") as f2:
+    with open("data/agg_mv.txt", "r") as f1, open(f"data/agg_mv_{size}%.txt", "r") as f2:
         strings = []
         for i,l in enumerate(f):
             if i == cntr:
                 break
             strings.append(l)
 
-        print(f"Writing in file: {f"data/agg_mv_{size}%.txt"}")
+        print(f"Writing in file: 'data/agg_mv_{size}%.txt'")
         f2.write("".join(strings))
 
 
