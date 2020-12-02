@@ -111,8 +111,9 @@ python train.py --model=<model-name>
 <details>
   <summary>Older Logs</summary>
 
-  I use 2x1080Ti configuration with 128 GB of RAM, `batch_size=350` seems to fill just about both the GPUs. Model `z5` has the baseline config.
   ### Training Log (Old)
+  
+  I use 2x1080Ti configuration with 128 GB of RAM, `batch_size=350` seems to fill just about both the GPUs. Model `z5` has the baseline config.
 
   | name        | n_embd | n_layer | buffer_size | batch_size | maxlen |
   | ------------| ------ | ------- | ----------- | ---------- | ------ |

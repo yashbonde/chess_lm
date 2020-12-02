@@ -204,8 +204,6 @@ elif sys.argv[1] == "-p":
 
 elif sys.argv[1] == "-m":
     # merge files and split into testing and training
-    split = float(sys.argv[2]) # split ratio
-    
     all_files = glob("./data/*.txt")
     by_order = {}
     for f in all_files:
@@ -236,20 +234,11 @@ elif sys.argv[1] == "-m":
 
     print("============= Total Games:", len(all_sequences))
     print("============= Total Moves:", total_moves)
-            
-    # now create a split
-    test_idx = int(len(all_sequences) * split)
-    print("TEST IDX", test_idx)
-    print("Writing ---> data/train_lm.txt, data/test_lm.txt")
-    with open("data/train_lm.txt", "w") as train_lm, open("data/test_lm.txt", "w") as test_lm:
-        train_lm.write("\n".join(all_sequences[test_idx:]))
-        test_lm.write("\n".join(all_sequences[:test_idx]))
-        
-    print("Writing ---> data/train_res.txt, data/test_res.txt")
-    with open("data/train_res.txt", "w") as train_lm, open("data/test_res.txt", "w") as test_lm:
-        train_lm.write("\n".join(all_results[test_idx:]))
-        test_lm.write("\n".join(all_results[:test_idx]))
 
+    print("Writing ---> data/all_lm.txt, data/all_res.txt")
+    with open("data/all_lm.txt", "w") as train_lm, open("data/all_res.txt", "w") as train_res:
+        train_lm.write("\n".join(all_sequences))
+        train_res.write("\n".join(all_results))
 
 # ----------------------------------------------- #
 

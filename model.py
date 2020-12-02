@@ -496,7 +496,7 @@ class DataConfig:
             self.attrs.append(k)
 
     def __repr__(self):
-        return "---- TRAINER CONFIGURATION ----\n" + \
+        return "---- DATA CONFIGURATION ----\n" + \
             "\n".join([f"{k}\t{getattr(self, k)}" for k in list(set([
                 "lm", "rm", "m2id", "maxlen", "buffer"
             ] + self.attrs))
