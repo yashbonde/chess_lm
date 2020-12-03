@@ -14,7 +14,7 @@ from torch.utils.data import IterableDataset, DataLoader, Dataset
 from torch.utils.tensorboard import SummaryWriter
 
 from transformers import GPT2Model, GPT2Config as ModelConfig
-from transformers.modeling_gpt2 import MLP, Attention
+from transformers.models.gpt2.modeling_gpt2 import MLP, Attention
 
 # ---- helper function ----- #
 def set_seed(seed):
@@ -214,13 +214,14 @@ class Trainer:
                 tb.add_scalar("train/loss_policy", loss_policy.item(), global_step=gs, walltime=time.time())
                 tb.add_scalar("train/loss_value", loss_value.item(), global_step=gs, walltime=time.time())
                 tb.add_scalar("train/move_acc", move_acc, global_step=gs, walltime=time.time())
-                tb.add_scalar("train/lr", scheduler.get_last_lr()[0], global_step=gs, walltime=time.time())
+                if scheduler is not None:
+                    tb.add_scalar("train/lr", scheduler.get_last_lr()[0], global_step=gs, walltime=time.time())
 
                 # backprop
                 loss_total.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
                 optimizer.step()
-                if scheduler:
+                if scheduler is not None:
                     scheduler.step()
 
                 # test if time has come
@@ -391,7 +392,7 @@ class TrainerConfig:
             self.attrs.append(k)
 
         if self.scheduler == "CosineAnnealingWarmRestarts":
-            assert hasattr(self, "t0mdiv"), "Provide this if using CosineAnnealingWarmRestarts Scheduler"
+            assert hasattr(self, "t0div"), "Provide this if using CosineAnnealingWarmRestarts Scheduler"
             assert hasattr(self, "tmult"), "Provide this if using CosineAnnealingWarmRestarts Scheduler"
 
     def __repr__(self):
