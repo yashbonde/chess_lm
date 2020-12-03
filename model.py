@@ -33,13 +33,13 @@ class BaseHFGPT(nn.Module):
         super().__init__()
         self.config = config
         self.gpt = GPT2Model(config)
-        self.policy_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
+        self.policy_head = nn.Linear(config.n_embd, config.vocab_size)
         # self.value_head = nn.Linear(config.n_embd, 1)
         self.value_head = nn.Sequential(*[
             nn.Linear(config.n_embd, config.n_embd // 2),
             nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon),
             nn.ReLU(),
-            nn.Linear(config.n_embd // 2),
+            nn.Linear(config.n_embd // 2, 1),
             nn.Tanh()
         ])
 
