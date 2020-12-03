@@ -22,7 +22,7 @@ Consider this simple game where two networks with the same weights were playing 
 
 <img src="assets/self-play1.png">
 
-Note that the game did not turn out to be like that, infact both the models play (policy) very stupidly. However they do correctly understand the state of the board and balck better than white because of that depth search. This used a `z5` model and 
+Note that the game did not turn out to be like that, infact both the models play (policy) very stupidly. However they do correctly understand the state of the board and balck better than white because of that depth search. This used a `z5` model (old).
 
 ## Todo
 
@@ -90,6 +90,10 @@ python3 download.py -m 0.05 # couple of minutes
 # Total Games: 7477392
 # Total Moves: 620683696
 # Test Size:   373869
+
+# compile the dataset
+python download.py -c 85 npz
+# maxlen = 85 and store to *.npz file
 ```
 
 **DEPRECATED:** This dataset is no longer used for training, the ZIP while will be available for a while but may be removed without warning.Download the ZIP using the following command:
@@ -132,7 +136,7 @@ python train.py --model=<model-name>
 
 ### Training Logs
 
-This is the new training logs on new machine (2x2080Ti). With the new datasets we have `620683696` moves and `7477392` games giving `83` moves per turn, considering this, the new models will be trained with a sequence length of `80`, lowering the compute required and faster training.
+This is the new training logs on new machine (2x2080Ti). With the new datasets we have `620683696` moves and `7477392` games giving `83` moves per turn, considering this, the new models will be trained with a sequence length of `85`, lowering the compute required and faster training. I have now started using weights and biases see all the details on the [project page](https://wandb.ai/yashbonde/blindfold-chess), current best model is `devoted-glade-16`.
 
 ## Metrics
 
@@ -152,10 +156,14 @@ I need to come up with good metrics!
   - Testing now happens as the training progresses and not after an epoch (re wrote `Trainer.train()` method for this)
   - `total_steps` is now the default iteration method and not `max_epochs`, determined using `total_step = num_batch * max_epochs` and add early stopping. This brings is closer to the literature where training is done over a fixed set of steps and valuation also happens on steps and not epochs.
 
-- **02/12/2020** Some more updates:
+- **04/12/2020** Some more updates:
   - New, better, larger dataset form FICS website
   - Updated `download.py` to now use multiprocessing for faster dataset preparation
   - Move to 2x2080Ti machine and start with new models
+  - Compile datasets in HDF5 or numpy zips
+  - Implment multiple different learning rate schedulers, best still is linear-warmup with exponential decay. Supports "CosineAnnealingWarmRestarts", "OneCycleLR", "MultiStepLR", "NoamDecay", "CosineDecay"
+  - Implement weight decay
+  - Move Training logs to W&B (god bless this!)
 
 ## Credits
 
