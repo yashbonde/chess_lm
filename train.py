@@ -9,7 +9,7 @@ from model import DataConfig, ModelConfig, BaseHFGPT, TrainerConfig, Trainer, ge
 args = ArgumentParser(description="Train a GPT2 model to play chess on moves only")
 
 # data args
-args.add_argument("--lmtrain", type=str, default = "data/chessD2.hdf5", help="path to train_lm file")
+args.add_argument("--lmtrain", type=str, default = "data/clm.npz", help="path to train_lm file")
 args.add_argument("--res", type=str, default = "data/all_res.txt", help="path to res file")
 args.add_argument("--m2id", type=str, default = "assets/moves.json", help="path to move_to_id json")
 
@@ -20,7 +20,7 @@ args.add_argument("--n_embd", type = int, default = 128, help = "embedding dim")
 args.add_argument("--n_layer", type = int, default = 30, help = "number of layers of the model")
 args.add_argument("--n_head", type = int, default = 8, help = "number of heads for MHA")
 
-args.add_argument("--lr", type = int, default = 0.005, help = "learning rate")
+args.add_argument("--lr", type = int, default = 0.05, help = "learning rate")
 args.add_argument("--beta1", type = int, default = 0.9, help = "Adam.beta1")
 args.add_argument("--beta2", type = int, default = 0.95, help = "Adam.beta2")
 
@@ -42,7 +42,11 @@ model_path = os.path.join(model_folder, args.model + ".pt")
 
 if args.lmtrain[-4:] == "hdf5":
     print("Using HDF5 data")
-    assert args.maxlen == 85, "using hdf5 means you have harcoded len"
+    assert args.maxlen == 85, "using hdf5 means you have harcoded len = 85"
+    
+elif args.lmtrain[-3:] == "npz":
+    print("Using numpy zips")
+    assert args.maxlen == 85, "using numpy means you have harcoded len = 85"
 
 dataConfig = DataConfig(
     lm=args.lmtrain,

@@ -278,7 +278,7 @@ elif sys.argv[1] == "-c":
     hdf.create_dataset("lms", shape=lms.shape, dtype="i", data=lms)
     hdf.create_dataset("res", shape=results.shape, dtype="i", data=results)
 
-    hfd.close()
+    hdf.close()
 
 
 

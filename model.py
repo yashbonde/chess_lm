@@ -37,7 +37,7 @@ class BaseHFGPT(nn.Module):
         # self.value_head = nn.Linear(config.n_embd, 1)
         self.value_head = nn.Sequential(*[
             nn.Linear(config.n_embd, config.n_embd // 2),
-            nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon),
+            nn.LayerNorm(config.n_embd // 2, eps=config.layer_norm_epsilon),
             nn.ReLU(),
             nn.Linear(config.n_embd // 2, 1),
             nn.Tanh()
@@ -100,10 +100,12 @@ class Trainer:
             lr = config.learning_rate,
             betas = config.betas
         )
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, total_steps = total_steps, max_lr=0.05)
-        
-        print(len(train_data), len(test_data))
+        # scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, total_steps = total_steps, max_lr=0.05)
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
+            milestones=[1000,2000,6000,10000]
+        , gamma=0.1) # 26455
 
+        print("Train Data Size:", len(train_data), "; Test Data Size:", len(test_data))
         with SummaryWriter(log_dir=config.tb_path, flush_secs=20) as tb:
             # this is second method for creating a training loop
             pbar_train = trange(total_steps, ncols=100)
@@ -353,9 +355,19 @@ def get_datasets(config, split):
     
     if config.lm[-4:] == "hdf5":
         # this is the hdf5
+        st = time.time()
         data = h5py.File(config.lm, "r")
         lms = data["lms"]
         results = data["res"]
+        print(f"HDF5 Loading took: {time.time()-st}s")
+        
+    elif config.lm[-3:] == "npz":
+        # this is numpy zip, load the pickle
+        st = time.time()
+        clm = np.load("data/clm.npz")
+        lms = clm["lms"]
+        results = clm["res"]
+        print(f"Numpy Loading took: {time.time()-st}s")
 
     else:
         len_file = 0
