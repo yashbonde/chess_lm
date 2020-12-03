@@ -156,11 +156,24 @@ class Trainer:
             lr = config.lr,
             betas = config.betas
         )
-        # scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, total_steps = total_steps, max_lr=0.05)
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
-            milestones=[1000,2000,6000,10000]
-        , gamma=0.1) # 26455
-        
+
+        # setup correct scheduler
+        if config.scheduler == "CosineAnnealingWarmRestarts":
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+                optimizer = optimizer,
+                T_0= total_steps // config.t0div,
+                T_mult=config.tmult,
+                eta_min=0,
+            )
+        elif config.scheduler == "OneCycleLR":
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                optimizer=optimizer,
+                max_lr=config.lr,
+                total_steps=total_steps
+            )
+
+        else:
+            scheduler = None
         print("Train Data Size:", len(train_data), "; Test Data Size:", len(test_data))
 
         with SummaryWriter(log_dir=config.tb_path, flush_secs=20) as tb:
@@ -207,7 +220,8 @@ class Trainer:
                 loss_total.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
                 optimizer.step()
-                scheduler.step()
+                if scheduler:
+                    scheduler.step()
 
                 # test if time has come
                 if gs > 0 and gs % config.test_every == 0:
@@ -356,6 +370,7 @@ class TrainerConfig:
     tb_path = None
     patience = -1
     test_every = None
+    scheduler = None
 
     def __init__(self, **kwargs):
         self.attrs = [
@@ -368,11 +383,16 @@ class TrainerConfig:
             "ckpt_path",
             "tb_path",
             "patience",
-            "test_every"
+            "test_every",
+            "scheduler"
         ]
         for k,v in kwargs.items():
             setattr(self, k, v)
             self.attrs.append(k)
+
+        if self.scheduler == "CosineAnnealingWarmRestarts":
+            assert hasattr(self, "t0mdiv"), "Provide this if using CosineAnnealingWarmRestarts Scheduler"
+            assert hasattr(self, "tmult"), "Provide this if using CosineAnnealingWarmRestarts Scheduler"
 
     def __repr__(self):
         return "---- TRAINER CONFIGURATION ----\n" + \
