@@ -131,3 +131,6 @@ agg_mv.txt
 agg_res.txt
 cool_samples/
 *.pgn
+
+data/
+wandb/

@@ -3,6 +3,8 @@
 import h5py
 import json
 import time
+import wandb
+wandb.init(project="blindfold-chess")
 import random
 import numpy as np
 from tqdm import trange
@@ -112,7 +114,7 @@ class BetaChess(nn.Module):
 
             # MSE works best for value function
             loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
-            loss_value = loss_value.mean()
+            loss_value = loss_value.mean() * 10
 
             loss = loss_policy + loss_value
 
@@ -143,12 +145,15 @@ class Trainer:
         print(f"Saving Model at {ckpt_path}")
         torch.save(raw_model.state_dict(), ckpt_path)
 
-    def train(self):
+    def train(self, args):
         model, config = self.model, self.config
         train_data = self.train_dataset
         test_data = self.test_dataset
         num_batches = len(train_data) // config.batch_size + int(len(train_data) % config.batch_size != 0)
         total_steps = num_batches * config.num_epochs
+        
+        wandb.init(config=args)
+        wandb.watch(model)
         
         # create step functions
         optimizer = torch.optim.Adam(
@@ -170,6 +175,18 @@ class Trainer:
                 optimizer=optimizer,
                 max_lr=config.lr,
                 total_steps=total_steps
+            )
+            
+        elif config.scheduler == "MultiStepLR":
+            scheduler = torch.optim.lr_scheduler.MultiStepLR(
+                optimizer=optimizer,
+                milestones=[100, 1000, 5000, 10000],
+            )
+
+        elif config.scheduler == "Noam":
+            warmup = int(config.warmup_perc * total_steps)
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
+                lr_lambda=lambda e: 100 * (128 ** -0.5) * min(max(1, e) ** -0.5, e * (warmup ** -1.5))
             )
 
         else:
@@ -214,8 +231,16 @@ class Trainer:
                 tb.add_scalar("train/loss_policy", loss_policy.item(), global_step=gs, walltime=time.time())
                 tb.add_scalar("train/loss_value", loss_value.item(), global_step=gs, walltime=time.time())
                 tb.add_scalar("train/move_acc", move_acc, global_step=gs, walltime=time.time())
+                log_dict = {
+                    "loss_total": loss_total.item(),
+                    "loss_policy": loss_policy.item(),
+                    "loss_value": loss_value.item(),
+                    "move_acc": move_acc
+                }
                 if scheduler is not None:
-                    tb.add_scalar("train/lr", scheduler.get_last_lr()[0], global_step=gs, walltime=time.time())
+                    last_lr = scheduler.get_last_lr()[0]
+                    tb.add_scalar("train/lr", last_lr, global_step=gs, walltime=time.time())
+                    log_dict.update({"lr": last_lr})
 
                 # backprop
                 loss_total.backward()
@@ -223,6 +248,8 @@ class Trainer:
                 optimizer.step()
                 if scheduler is not None:
                     scheduler.step()
+                    
+                wandb.log(log_dict)
 
                 # test if time has come
                 if gs > 0 and gs % config.test_every == 0:
@@ -286,80 +313,6 @@ class Trainer:
                     print("Stopping training")
                     break
 
-
-            ### The code below is saved for reference I don't use this method anymore
-
-            # def run_epoch(split, _gs = None):
-            #     is_train = split == "train"
-            #     model.train(is_train)
-            #     data = self.train_dataset if is_train else self.test_dataset
-            #     dl = DataLoader(
-            #         data,
-            #         pin_memory = True,
-            #         batch_size = config.batch_size,
-            #         shuffle = data.shuffle
-            #     )
-
-            #     num_batches = len(data) // config.batch_size + int(len(data) % config.batch_size != 0)
-
-            #     losses = []
-            #     pbar = trange(num_batches, ncols = 100)
-            #     for it, d in zip(pbar, dl):
-            #         _l = -1 if not losses else losses[-1]
-            #         if is_train:
-            #             pbar.set_description(f"[TRAIN] GS: {_gs}, IT: {it}, Loss: {round(_l, 5)}")
-            #         else:
-            #             pbar.set_description(f"[VAL] Epoch: {_gs}")
-
-            #         d = {k:v.to(self.device) for k,v in d.items()}
-            #         # print({k:v.size() for k,v in d.items()})
-            #         with torch.set_grad_enabled(is_train):
-            #             (policy, values, loss) = model(loss=True, **d)
-            #             loss_total = loss[0].mean() # gather
-            #             loss_policy = loss[1].mean() # gather
-            #             loss_value = loss[2].mean() # gather
-            #             losses.append(loss_total.item())
-
-            #             policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
-            #             values = values[:,:-1,0].contiguous().view(-1)
-            #             move_acc = sum(d["input_ids"][:, 1:].contiguous().view(-1), torch.argmax(policy, dim=-1)).item()
-
-            #         # save if required
-            #         if _gs % config.save_every == 0:
-            #             cp = config.ckpt_path.replace(".pt", f"_{_gs}.pt")
-            #             self.save_checkpoint(cp)
-
-            #         if is_train:
-            #             # add things to tb, loss and attention images
-            #             tb.add_scalar("train/loss_total", loss_total.item(), global_step=_gs, walltime=time.time())
-            #             tb.add_scalar("train/loss_policy", loss_policy.item(), global_step=_gs, walltime=time.time())
-            #             tb.add_scalar("train/loss_value", loss_value.item(), global_step=_gs, walltime=time.time())
-            #             tb.add_scalar("train/move_acc", move_acc, global_step=_gs, walltime=time.time())
-
-            #             loss_total.backward()
-            #             torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
-            #             optimizer.step()
-            #             _gs += 1
-
-            #         else:
-            #             # add to tensorboard
-            #             tb.add_scalar("test/loss_total", loss_total.item(), global_step=_gs, walltime=time.time())
-            #             tb.add_scalar("test/loss_policy", loss_policy.item(), global_step=_gs, walltime=time.time())
-            #             tb.add_scalar("test/loss_value", loss_value.item(), global_step=_gs, walltime=time.time())
-            #             tb.add_scalar("test/move_acc", move_acc, global_step=_gs, walltime=time.time())
-
-            #     if not is_train:
-            #         test_loss = float(np.mean(losses))
-            #         return test_loss
-
-            #     return _gs
-
-            # # now write wrapper for each epoch
-            # gs = 0
-            # for e in range(config.max_epochs):
-            #     gs = run_epoch("train", gs)
-            #     self.save_checkpoint()
-
 class TrainerConfig:
     num_epochs = 2
     batch_size = 64
@@ -394,6 +347,9 @@ class TrainerConfig:
         if self.scheduler == "CosineAnnealingWarmRestarts":
             assert hasattr(self, "t0div"), "Provide this if using CosineAnnealingWarmRestarts Scheduler"
             assert hasattr(self, "tmult"), "Provide this if using CosineAnnealingWarmRestarts Scheduler"
+
+        elif self.scheduler == "Noam":
+            assert hasattr(self, "warmup_perc"), "Provide this if using Noam"
 
     def __repr__(self):
         return "---- TRAINER CONFIGURATION ----\n" + \
