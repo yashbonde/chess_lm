@@ -9,11 +9,12 @@ from tqdm import trange
 
 import torch
 from torch import nn
-from torch.optim import Adam
 from torch.nn import functional as F
 from torch.utils.data import IterableDataset, DataLoader, Dataset
 from torch.utils.tensorboard import SummaryWriter
+
 from transformers import GPT2Model, GPT2Config as ModelConfig
+from transformers.modeling_gpt2 import MLP, Attention
 
 # ---- helper function ----- #
 def set_seed(seed):
@@ -45,6 +46,61 @@ class BaseHFGPT(nn.Module):
 
     def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
         x = self.gpt(input_ids, return_dict = True, **gptkwargs)
+        logits = self.policy_head(x.last_hidden_state)
+        values = self.value_head(x.last_hidden_state)
+        out = (logits, values)
+        if loss is not None and value_targets is not None:            
+            # Categorical cross entropy loss worked best for policy
+            logits_reshape = logits[:, :-1, :].contiguous().view(-1, logits.size(-1))
+            targets = input_ids[:, 1:].contiguous().view(-1)
+            loss_policy = F.cross_entropy(logits_reshape, targets)
+
+            # MSE works best for value function
+            loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
+            loss_value = loss_value.mean()
+
+            loss = loss_policy + loss_value
+
+            out = (logits, values, (loss, loss_policy, loss_value))
+        return out
+
+
+class PolicyHead(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.attn = Attention(config.n_embd, config.n_ctx, config, scale = True)
+        self.ln = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
+        self.mlp = MLP(config.n_embd * 4, config)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size)
+        
+    def forward(self, hidden_states):
+        # this is the Block
+        attn_output = self.attn(hidden_states)[0]
+        hidden_states = attn_output + hidden_states # residual connection
+        feed_forward_hidden_states = self.mlp(self.ln(hidden_states))
+        hidden_states = hidden_states + feed_forward_hidden_states # residual connection
+        return self.lm_head(hidden_states)
+        
+
+class BetaChess(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        config = ModelConfig(**vars(self.config))
+        config.n_layer = config.n_layer - 1
+        self.body = GPT2Model(config) # residual tower in AlphaZero
+        
+        # the policy head and value head are now similar to what is in AlphaZero
+        self.policy_head = PolicyHead(config)
+        self.value_head = nn.Sequential(*[
+            MLP(config.n_embd, config),
+            nn.ReLU(),
+            nn.Linear(config.n_embd, 1),
+            nn.Tanh()
+        ])
+
+    def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
+        x = self.body(input_ids, return_dict = True, **gptkwargs)
         logits = self.policy_head(x.last_hidden_state)
         values = self.value_head(x.last_hidden_state)
         out = (logits, values)
@@ -97,15 +153,16 @@ class Trainer:
         # create step functions
         optimizer = torch.optim.Adam(
             model.parameters(),
-            lr = config.learning_rate,
+            lr = config.lr,
             betas = config.betas
         )
         # scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, total_steps = total_steps, max_lr=0.05)
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
             milestones=[1000,2000,6000,10000]
         , gamma=0.1) # 26455
-
+        
         print("Train Data Size:", len(train_data), "; Test Data Size:", len(test_data))
+
         with SummaryWriter(log_dir=config.tb_path, flush_secs=20) as tb:
             # this is second method for creating a training loop
             pbar_train = trange(total_steps, ncols=100)
@@ -291,7 +348,7 @@ class Trainer:
 class TrainerConfig:
     num_epochs = 2
     batch_size = 64
-    learning_rate = 3e-4
+    lr = 3e-4
     betas = (0.9, 0.95)
     grad_norm_clip = 1.0
     num_workers = 0 # for DataLoader

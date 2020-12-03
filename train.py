@@ -63,7 +63,11 @@ modelConfig = ModelConfig(
     n_ctx=args.maxlen,
     n_embd=args.n_embd,
     n_layer=args.n_layer,
-    n_head=args.n_head
+    n_head=args.n_head,
+    activation_function="relu",
+    resid_pdrop=0.0,
+    embd_pdrop=0.0,
+    attn_pdrop=0.0,
 )
 model = BaseHFGPT(modelConfig)
 print(f"Model Size: {sum(dict((p.data_ptr(), p.numel()) for p in model.parameters()).values())}")

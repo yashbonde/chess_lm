@@ -244,6 +244,10 @@ elif sys.argv[1] == "-m":
 
 
 elif sys.argv[1] == "-c":
+    # compiles the dataset into HDF5 or NPZ
+    maxlen = int(sys.argv[2])
+    format = sys.argv[3]
+
     # compile to .hdf5 file
     len_file = 0
     with open("data/all_lm.txt", "r") as f:
@@ -267,18 +271,23 @@ elif sys.argv[1] == "-c":
             res = np.ones(len(lm)) * game_res
             res[np.arange(1, len(lm), 2)] = -game_res
             results.extend([0] + res.tolist())  # first will always generate 0
-
-    # create the file
-    hdf = h5py.File("data/chessD2.hdf5", "w")
-
+    
     # convert to lms and results
-    lms = np.array(lms[:-(len(lms) % 85)]).reshape(-1, 85)
-    results = np.array(results[:-(len(results) % 85)]).reshape(-1, 85)
+    lms = np.array(lms[:-(len(lms) % maxlen)]).reshape(-1, maxlen)
+    results = np.array(results[:-(len(results) % maxlen)]).reshape(-1, maxlen)
 
-    hdf.create_dataset("lms", shape=lms.shape, dtype="i", data=lms)
-    hdf.create_dataset("res", shape=results.shape, dtype="i", data=results)
+    if format == "hdf5":
+        print("Saving HDF5 at data/chessD2.hdf5")
+        hdf = h5py.File("data/chessD2.hdf5", "w")
 
-    hdf.close()
+        hdf.create_dataset("lms", shape=lms.shape, dtype="i", data=lms)
+        hdf.create_dataset("res", shape=results.shape, dtype="i", data=results)
+
+        hdf.close()
+
+    elif format == "npz":
+        print("Saving Numpy zip at data/clm.npz")
+        np.savez("data/clm.npz", lms=lms, res=results)
 
 
 
