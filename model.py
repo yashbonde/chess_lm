@@ -128,6 +128,8 @@ def init_weights(module):
 
 def configure_optimizers(model, train_config):
     """
+    from karpathy/minGPT
+
     This long function is unfortunately doing something very simple and is being very defensive:
     We are separating out all parameters of the model into two buckets: those that will experience
     weight decay for regularization and those that won't (biases, and layernorm/embedding weights).
@@ -200,7 +202,12 @@ class Trainer:
         num_batches = len(train_data) // config.batch_size + int(len(train_data) % config.batch_size != 0)
         total_steps = num_batches * config.num_epochs
         
-        wandb.init(config=args)
+        # we don't need to send all the hyper-parameters to wandb so instead we create a new dict
+        hyperparameters = {
+            "warmup_perc": config.warmup_perc,
+            "scheduler": config.scheduler,
+        }
+        wandb.init(config=vars(hyperparameters))  # add all the configurations
         wandb.watch(model)
         
         # create step functions
@@ -248,6 +255,14 @@ class Trainer:
                 return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress))) # 0.5 * 2.0 = 1.0
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
+        elif config.scheduler == "WarmupConstant":
+            warmup = int(config.warmup_perc * total_steps)
+            def lr_lambda(current_step: int):
+                if current_step < warmup:
+                    return float(current_step) / float(max(1.0, warmup))
+                return 1.0
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
         else:
             scheduler = None
         print("Train Data Size:", len(train_data), "; Test Data Size:", len(test_data))
@@ -267,7 +282,7 @@ class Trainer:
                 # total steps is now the primary iteration method
                 d = {k:v.to(self.device) for k,v in d.items()}
                 
-                epoch = gs // config.batch_size
+                epoch = total_steps // gs
                 pbar_train.set_description(f"[TRAIN] GS: {gs}, Epoch: {epoch}, Loss: {round(train_losses[-1], 5)}, Acc: {train_acc[-1]}")
 
                 # get model results
@@ -352,6 +367,7 @@ class Trainer:
                     losses = np.mean(test_losses)
                     test_acc = np.mean(test_acc)
                     print(f"Loss: {losses:.3f}; Acc: {test_acc:.3f}", end = " ")
+                    wandb.log({"test_acc": test_acc, "test_loss": losses})
 
                     if prev_train_loss > losses:
                         prev_train_loss = losses
@@ -408,8 +424,8 @@ class TrainerConfig:
             assert hasattr(self, "t0div"), "Provide this if using CosineAnnealingWarmRestarts Scheduler"
             assert hasattr(self, "tmult"), "Provide this if using CosineAnnealingWarmRestarts Scheduler"
 
-        elif "Decay" in self.scheduler:
-            assert hasattr(self, "warmup_perc"), "Provide this if using Decay method"
+        elif self.scheduler in ["NoamDecay", "CosineDecay", "WarmupConstant"]:
+            assert hasattr(self, "warmup_perc"), "Provide Warmup percentage"
 
     def __repr__(self):
         return "---- TRAINER CONFIGURATION ----\n" + \
