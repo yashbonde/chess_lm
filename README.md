@@ -7,10 +7,10 @@ Read [blog](https://yashbonde.github.io/blogs/chess-lm.html) for more informatio
 <!-- I cannot believe that people do [such](https://arxiv.org/pdf/2008.04057.pdf) garbage work and can get
 away with a paper. This is just sad man. -->
 
-<!-- Now added is the code to server and a simple webapge to play in:
+Now added is the code to server and a simple webapge to play in:
 ```
-python3 play.py # goto http://0.0.0.0:5000/ in browser
-``` -->
+python3 play.py # goto http://0.0.0.0:5000/ in browser and play
+```
 
 To see a random gameplay between two AI agents ("AI goes brrrr....") run `python3 game.py` which will print value, confidence for each move and create a PGN file. To see the gameplay online goto this [website](https://chesstempo.com/pgn-viewer/), copy paste your PGN.
 
