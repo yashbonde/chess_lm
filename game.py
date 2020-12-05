@@ -92,7 +92,7 @@ class GameEngine():
     def reset(self):
         self.board.reset()
 
-    def step(self, move_id):
+    def step(self, move):
         """
         Game is considered draw in the following cases:
         - Stalemate: no legal move but no check
@@ -114,7 +114,7 @@ class GameEngine():
         Read more: https://www.chess.com/article/view/how-chess-games-can-end-8-ways-explained
         """
         board = self.board
-        board.push(move_id)
+        board.push(move)
         res = "game"
 
         # draw results
@@ -484,7 +484,7 @@ def select_action(n, t=1):
 
 class Player():
     def __init__(self, config, save_path, vocab_path, model_class, search = "sample", depth = 1):
-        if search not in ["sample", "greedy", "random", "minimax", "mcts"]:
+        if search not in ["sample", "greedy", "minimax", "mcts"]:
             raise ValueError(f"Searching method: {search} not defined")
 
         self.search = search  # method used to determine the move
@@ -640,15 +640,23 @@ class Player():
             # greedy method
             move = legal[np.argmax(lg_mask)]
 
-        elif self.search == "random":
-            # random moves
-            move = np.random.choice(legal)
-            value = None
-            conf = None
-
-        if value < -0.8:
+        if value is not None and value < -0.8:
             move = "resign"
 
+        return move, value, conf
+
+
+class RandomPlayer():
+    def __init__(self):
+        pass
+
+    def move(self, game):
+        # random moves
+        b = game.board
+        legal = [x for x in b.legal_moves]
+        move = np.random.choice(legal)
+        value = None
+        conf = None
         return move, value, conf
 
 

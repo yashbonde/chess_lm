@@ -2,7 +2,10 @@
     <head>
         <meta charset="utf-8">
         <meta http="X-UA-Compatible" content="IE=edge">
-        <title>Chessshhh Engine</title>
+        <title>NeuraPlayer Chess</title>
+
+        <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600;700&display=swap"
+        rel="stylesheet">
         
         <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='board.min.cs') }}s">
         <script src="{{ url_for('static', filename='jQuery-v3.4.1.min.js') }}"></script>
@@ -10,10 +13,17 @@
         <script src="{{ url_for('static', filename='chess.min.js') }}"></script>
     </head>
 
-    <body style="font-size: 18px;">
-        <h3 style="text-align: center;">NeuraPlayer</h3>
-        <button onclick="newGame()" style="position: absolute;left: 48%;">New Game</button><br><br>
-        <div id="board" class="board"></div>
+    <body>
+        <div  style="
+            font-size: 18px; font-family: 'Barlow';
+            position: fixed; top: 35%; left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        ">
+            <h3 style="font-size: 2.0rem;">NeuraPlayer</h3>
+            <button onclick="newGame()">New Game</button><br><br>
+            <p id="caption" style="margin-top: 0px;">You go man!</p>
+            <div id="board" style="width: 400px; transform: translate(0%, 0%)"></div>
         </div>
 
 <script type="text/javascript">
@@ -30,29 +40,28 @@ function onDrop(source, target) {
         to: target,
         promotion: 'q'
     });
+    console.log(move)
     if (move == null) {
         return 'snapback';
     }
 
-    console.log('JSON.stringify({ from: source, target: target})', JSON.stringify({from: source, target: target }));
-
-    $.ajax({
-      url: 'http://127.0.0.1:5000/move',
-      data: { from: source, target: target},
-      onsuccess: function (move_payload) {
-        // update the board state
-        if (move_payload.content != null) {
-          alert(move_payload.content);
+    $.get(
+        url = "/move",
+        data = {from: source, to: target, piece: move.piece},
+        function (move_payload) {
+            // update the board state
+            console.log('move_payload>>>', move_payload)
+            if (move_payload.content != null){
+                document.getElementById("caption").innerHTML = move_payload.content;
+            }
+            board.position(position = move_payload.board_state, useAnimation = true);
+            game.move({
+                from: move_payload.from_square,
+                to: move_payload.to_square
+            })
+            // console.log('game>>>', game);
         }
-        console.log('move_payload>>>', move_payload)
-        board.position(position = move_payload.board_state, useAnimation = true);
-        game.move({
-          from: move_payload.from_square,
-          to: move_payload.to_square
-        })
-        console.log('game>>>', game);
-      }
-    })
+    )
     
 };
 
@@ -70,7 +79,8 @@ function newGame() {
 
 // define the functions
 var game = new Chess()
-var board = ChessBoard('board', {
+var ruyLopez = 'r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R'
+var board = ChessBoard('board',{
     draggable: true,
     position: 'start',
     onDragStart,

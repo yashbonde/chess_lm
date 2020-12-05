@@ -1,78 +1,74 @@
-"""main runner file for our chess engine setup
-13.11.2019 - @yashbonde"""
+"""server file for playing with NeuraPlayer
+5.12.2020 - @yashbonde"""
 
-import os
-import uuid
-import random
-import logging
-from glob import glob
-from flask import request, make_response, render_template, Flask, jsonify, url_for
+import json
+from flask import request, make_response, render_template, Flask, jsonify
 
-from game import Player, GameEngine
+from game import Player, RandomPlayer, GameEngine, Move
+from model import BaseHFGPT, ModelConfig
 
 # make the app and run the server
 app = Flask(__name__)
 
 game = GameEngine()
-print("INIT GAME:\n", game)
+# player = RandomPlayer()
 
-@app.route('/move', methods = ["POST"])
+# define the NeuraPlayer
+with open("assets/moves.json") as f:
+    vocab_size = len(json.load(f))
+config = ModelConfig(
+    vocab_size=vocab_size,
+    n_positions=180,
+    n_ctx=180,
+    n_embd=128,
+    n_layer=30,
+    n_head=8
+)
+player = Player(
+    config,
+    "models/useful/q1/q1_15000.pt",
+    "assets/moves.json",
+    search="sample",
+    depth=2,
+    model_class=BaseHFGPT
+)
+
+@app.route('/move')
 def make_move():
-    # # get payload data
-    # payload = request.get_json()
-    print("\n\n", request.args)
-    # auth_token = payload["auth_token"]
-    # game_id = payload['game_id']
-    # from_ = payload['from']
-    # to_ = payload['target']
-    # player_no = payload['player_no']
-    # board_fen = payload['board_fen']
-    # san = payload['san'] # this is the notation we would like to save}
+    # let the player 
+    move_dict = request.args
+    move = f"{move_dict['from']}{move_dict['to']}"
 
-    # # update move in DB for current player and game state if required
-    # moves.add_move_using_auth(CURR, CONN, game_id, auth_token, board_fen, san)
-    # if san[-1] == '#': # this means that the game has ended
-    #     games.end_game(CURR, CONN, game_id)
-    #     return make_response(jsonify(
-    #         board_state = board_fen,
-    #         from_square = None,
-    #         to_square = None,
-    #         content = 'Checkmate, You Won! Proceed to a new game, my child!'
-    #     ))
+    # handling for promotion
+    if move_dict["piece"] == "p" and move[-1] in ["1", "8"]:
+        move = move + "q"
+    move = Move(move)
+    done, res = game.step(move)
+    print("move", move, game.board.fen())
+    
+    if done:
+        response = make_response(jsonify(content = res))
+        return response
 
-    # # feed the AI new state and get legal moves
-    # res = move_orchestrator(board_fen)
+    # player makes the move and board gets updated
+    move, _, _ = player.move(game)
+    game.step(move)
+    move = str(move)
 
-    # # update the move for the opponent plus update the game state if needed
-    # moves.add_opp_move_using_auth(CURR, CONN, player_no, game_id, auth_token, res['new_state'], res['san'])
-    # if res['content'] is not None:
-    #     games.end_game(CURR, CONN, game_id)
-    #     games.end_game(CURR, CONN, game_id)
-    #     return make_response(jsonify(
-    #         board_state = board_fen,
-    #         from_square = None,
-    #         to_square = None,
-    #         content = res['content']
-    #     ))
-
-    # # return the new move
-    # return make_response(jsonify(
-    #     board_state = res['new_state'],
-    #     from_square = res['from'].lower(),
-    #     to_square = res['to'].lower(),
-    #     content = res['content']
-    # ))
-
+    # response
     response = make_response(jsonify(
-        board_state="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
+        board_state=game.board.fen(),
+        from_square = move[:2],
+        to_square = move[2:]
     ))
     response.headers["Access-Control-Allow-Origin"] = "*"
-    print(response)
     return response
 
 
 @app.route("/")
 def new_game():
+    global game
+    game.reset()
     return render_template("index.html")
 
 # --mode=sf/neura
