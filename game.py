@@ -13,7 +13,7 @@ from time import time
 
 import torch
 from torch import Tensor
-from model import BaseHFGPT, ModelConfig
+from model import BaseHFGPT, ModelConfig, BetaChess
 
 
 def Move(x):
@@ -188,21 +188,19 @@ def top_p(x, p = 0.98):
 ####### Tree Helpers ###########################
 ################################################
 class Node():
-    def __init__(self, value, move, p, b):
-        """
-        [GAME] m1, m2, m3, m4, m5, m6, m7, m8 ---> s = {a0 ... a8}
-        value = model(a0 ... a8;a9) = q(s,a) # assume I am right
-        """
-        self.value = value # is actually the action value
+    def __init__(self, state_value, move, p, b, color, rc):
+        self.state_value = state_value # the value is now state action value
         self.move = move
-        self.children = [] # initialise with a list
-
-        self.state = [str(x) for x in b.move_stack] # state at which this action was taken
-        self.nsb = sum([1 for _ in b.legal_moves])
-        self.n = 1 # because first time initialisation means that model came here
-        self.p = p # prior
+        self.p = p # prior - probability of taking this move
+        self.color = color # color of player taking this move
+        self.rc = rc # root_node.color
         
-        self.update = False
+        self.n = 0 # number of times this is visited, initialised with 0
+        self.children = [] # all the children
+        self.state = [str(x) for x in b.move_stack] # state at which this action was taken
+        self.nsb = len(b.move_stack)
+        self.action_value = 0 # what is the action value of taking this move
+        self.inv_color = "white" if color == "black" else "black"
         
     @property
     def total_nodes(self):
@@ -220,12 +218,14 @@ class Node():
             c = [self]
         return c
     
-    def update_q(self):
-        assert self.update is False, "Value already updated, calling multiple times can cause an issue"
-        for c in self.children:
-            c.update_q()
+    def get_adjusted_action_value(self):
+        # this is the one given in MuZero paper
         const = 1.25 + np.log(1 + (1 + self.nsb)/19652) * (np.sqrt(self.nsb) / (1+self.n))
-        self.value = self.value + self.p * const
+        value = self.action_value + self.p * const
+        return value
+    
+    def get_action_value_with_exploration(self):
+        return self.action_value + 5 * self.p * np.sqrt(self.nsb) / (1+self.n)
 
     @property
     def terminal(self):
@@ -238,10 +238,10 @@ class Node():
         return len(self.children)
 
     def __repr__(self):
-        return f"<Move '{self.move[:4]}'; v={self.value:.3f} c={len(self)}; n={self.n}; s={len(self.state)} nsb={self.nsb} p={self.p:.3f}>"
+        return f"<Move '{self.move}'; q={self.action_value:.3f} v={self.state_value:.3f} c={len(self)}; n={self.n}; s={len(self.state)} nsb={self.nsb} p={self.p:.3f}>"
     
     def __str__(self, level=0):
-        ret = "\t"*level+repr(self)+"\n"
+        ret = "  "*level+repr(self)+"\n"
         for child in self.children:
             ret += child.__str__(level+1)
         return ret
@@ -360,84 +360,99 @@ def update_node_bonus(root_node):
 ####### Monte Carlo Tree Search ################
 ################################################
 
-def best_move_for_this_board(model, root_node, b, logits_kp1, mv_ids, vocab, inv_vocab, v=False):
-    # I need to find what the are the values for taking all legal actions at (k+2)
-    mv_batched = np.asarray([[0] + [vocab[str(x)[:4]] for x in b.move_stack] + [l]
-                             for l in mv_ids])[:, :model.config.n_ctx]
-    with torch.no_grad():  # whatever can be played and what is the prediction till now
-        logits, values = model(input_ids=Tensor(mv_batched).long())
-        logits_kp2 = logits[0, -1].numpy()  # [1, N] # at k+2
-        values_kp2 = values[:, -1].tolist()  # [1, 1]
-
-    if v:
-        print("--->>>", logits_kp2.shape, len(values_kp2))
-
-    # now I have what are the best moves here
-    for probability_of_taking_move, value_of_taking_this_move, mv in zip(logits_kp1, values_kp2, mv_ids):
-        bcopy = b.copy()
-        root_node.children.append(Node(
-            value=value_of_taking_this_move[0],
-            move=inv_vocab[mv],
-            p=probability_of_taking_move,
-            b=bcopy,
-            color=root_node.inv_color,
-            rc=root_node.rc
-        ))
-
-    # the action to be taken is determined by the node values
-    root_node.update_q()
-    best_node = sorted(root_node.children, key=lambda x: x.value)[-1]
-    move = Move(best_node.move)
-    return move, best_node
-
-
-def expand_tree(model, root_node, b, depth, vocab, inv_vocab, nodes_taken, v=False):
-    if v:
-        print(f"{depth}, {root_node.s}, {len(nodes_taken)}")
-
-    # get policy: get the possible future moves (k+1)
-    mvs = get_mv_ids(b, vocab)  # whatever has been played till now
+def expand_tree(model, root_node, b, depth, vocab, inv_vocab, nodes_taken):
+    mvs = get_mv_ids(b, vocab)[:model.config.n_ctx] # whatever has been played till now
     legal_moves = [vocab[str(x)[:4]] for x in b.legal_moves]
-    with torch.no_grad():  # whatever can be played and what is the prediction till now
+    
+    # step 1: for this root node I need to determine what are the probabilities of next move
+    with torch.no_grad():
         logits, values = model(input_ids=Tensor(mvs).view(1, len(mvs)).long())
         logits_kp1 = logits[0, -1].numpy()  # [1, N]
         values_kp1 = values[0, -1].item()  # [1, 1]
         logits_kp1 = softmax(logits_kp1[legal_moves])
+        
+    # EXPANSION
+    # step 2: for all the next legal moves what are the probabilities and next board states
+    mvs_batched = np.asarray([[*mvs] + [l] for l in legal_moves])[:, :model.config.n_ctx]
+    with torch.no_grad():
+        logits, values = model(input_ids=Tensor(mvs_batched).long())
+        logits_kp2 = logits[0, -1].numpy()  # [1, N] # at k+2
+        values_kp2 = values[:, -1].tolist()  # [1, 1]
+    # now for this root_node we have the k+2 depth possible tree, so we add all this to the root_node children
+    for prior, state_value_kp2, mv in zip(logits_kp1, values_kp2, legal_moves):
+        # the priors are for k+1 and so come from logits_kp1 while the state values come from k+2
+        node = Node(
+            state_value = state_value_kp2[0],
+            move = inv_vocab[mv],
+            p = prior,
+            b = b,
+            color=root_node.inv_color,
+            rc=root_node.rc
+        )
+        this_node = list(filter(lambda x: x == node, root_node.children))
+        if this_node:
+            this_node = this_node[0]
+            this_node.p = node.p
+        else:
+            root_node.children.append(node)
 
-    # selection -> play the best move till now
-    move, child_node_to_take = best_move_for_this_board(
-        model=model, root_node=root_node,
-        b=b, logits_kp1=logits_kp1, mv_ids=legal_moves,
-        v=v, vocab=vocab, inv_vocab=inv_vocab,
-    )
+    # SELECTION
+    # step 3: select the best move
+    action_values = np.asarray([x.get_action_value_with_exploration() for x in root_node.children]) # a = q + u
+    dirchlet_noise =  np.random.dirichlet(np.ones_like(action_values) * 0.3) # Dir(a)
+    action_value = 0.75 * action_values + 0.25 * dirchlet_noise
+    child_node = root_node.children[np.argsort(action_value)[-1]] # chose the action with highest state action value
+    nodes_taken.append(child_node)
+    # now we have the best move so push this to the board
     bfuture = b.copy()
-    bfuture.push(move)
-    nodes_taken.append(child_node_to_take)
+    bfuture.push(Move(child_node.move))
 
-    # check for terminal state
+    # EVALUATION
+    # step 4: check for terminal state
     done, res = check_board_state(bfuture)
     if done:
         if res == "draw":
-            child_node_to_take.value = 0
+            child_node.state_value = 0
         else:
-            value = 1 if child_node_to_take.color == child_node_to_take.rc else -1
-            child_node_to_take.value = value
+            value = 1 if child_node.color == child_node.rc else -1
+            child_node.state_value = value
     else:
         if depth > 1:
             # expansion
-            expand_tree(model=model, root_node=child_node_to_take, b=bfuture, depth=depth -
-                        1, vocab=vocab, inv_vocab=inv_vocab, nodes_taken=nodes_taken, v=v)
+            expand_tree(
+                model=model,
+                root_node=child_node,
+                b=bfuture,
+                depth=depth - 1,
+                vocab=vocab,
+                inv_vocab=inv_vocab,
+                nodes_taken=nodes_taken
+            )
 
 
-def backup(nodes_taken, discount_factor = 0.99):
+def backup(nodes_taken, discount_factor = 1):
+    # BACKUP
+    # discounted bootstrap backup for action_value updation. undiscounted means gamma = 1
     for i, n in enumerate(nodes_taken[:-1]):
-        # bsv = r1 + g1*r_2 + g2*r_3 + g3*r_4
         bootstrap = 0
-        for j, n2 in enumerate(nodes_taken[i:]):
-            bootstrap += (discount_factor**j) * n2.value
-        n.value = (n.n*n.value + bootstrap) / (n.n + 1)
+        for j, n2 in enumerate(nodes_taken[i+1:]):
+            bootstrap += (discount_factor**j) * n2.state_value
+        n.action_value = (n.n*n.action_value + bootstrap) / (n.n + 1)
         n.n = n.n + 1
+        
+def mcts(model, root_node, b, depth, vocab, inv_vocab, sims = 10):
+    for i in trange(sims):
+        nodes_taken = []
+        expand_tree(model, root_node, b, depth, vocab, inv_vocab, nodes_taken)
+        backup(nodes_taken)
 
+def print_mcts(root_node, level=0):
+    str_level = str(level) + " "*(3 - len(str(level)))
+    ret = str_level + "  "*level+repr(root_node)+"\n"
+    for child in root_node.children:
+        if len(child):
+            ret += print_mcts(child, level + 1)
+    return ret
 
 ################################################
 ####### Search #################################
@@ -481,7 +496,7 @@ def minimax(node, depth, _max = False):
 ################################################
 
 class Player():
-    def __init__(self, config, save_path, vocab_path, search = "sample", depth = 1):
+    def __init__(self, config, save_path, vocab_path, model_class, search = "sample", depth = 1):
         if search not in ["sample", "greedy", "random", "minimax"]:
             raise ValueError(f"Searching method: {search} not defined")
 
@@ -499,15 +514,14 @@ class Player():
         self.elo = 1000
         self.idx = None
 
-
-        self.load()
+        self.load(model_class)
 
     def __repr__(self):
         return "<NeuraPlayer>"
 
-    def load(self):
+    def load(self, model_class):
         self.device = "cpu"
-        model = BaseHFGPT(self.config)
+        model = model_class(self.config)
 
         # Fixed: Load model in CPU
         model.load_state_dict(torch.load(self.save_path, map_location=torch.device(self.device)))
@@ -640,15 +654,37 @@ class Player():
 if __name__ == "__main__":
     with open("assets/moves.json") as f:
         vocab_size = len(json.load(f))
-    config = ModelConfig(vocab_size=vocab_size, n_positions=180,
-                         n_ctx=180, n_embd=128, n_layer=30, n_head=8)
-    player1 = Player(config, "models/useful/q1/q1_15000.pt",
-                     "assets/moves.json", search="sample")  # assume to be white
-    config = ModelConfig(vocab_size=vocab_size, n_positions=180,
-                         n_ctx=180, n_embd=128, n_layer=30, n_head=8)
-    player2 = Player(config, "models/useful/q1/q1_15000.pt",
-                     "assets/moves.json", search="minimax",
-                     depth = 2)  # assume to be black
+    config = ModelConfig(
+        vocab_size=vocab_size,
+        n_positions=85,
+        n_ctx=85,
+        n_embd=128,
+        n_layer=30,
+        n_head=8
+    )
+    player1 = Player(
+        config,
+        "models/useful/a8/a8_14000.pt",
+        "assets/moves.json",
+        search="sample",
+        model_class = BetaChess
+    )  # assume to be white
+    config = ModelConfig(
+        vocab_size=vocab_size,
+        n_positions=180,
+        n_ctx=180,
+        n_embd=128,
+        n_layer=30,
+        n_head=8
+    )
+    player2 = Player(
+        config,
+        "models/useful/q1/q1_15000.pt",
+        "assets/moves.json",
+        search="sample",
+        depth = 2,
+        model_class = BaseHFGPT
+    ) # assume to be black
 
     for round in trange(1):
         print(f"Starting round: {round}")

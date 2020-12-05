@@ -93,7 +93,7 @@ trainerConf = TrainerConfig(
     scheduler=args.scheduler,
     t0div = 5,
     tmult = 2,
-    warmup_perc = 0.14 # 7% of steps are used for warmup
+    warmup_perc = 0.14 # 14% of steps are used for warmup
 )
 trainer = Trainer(model, dstrain, trainerConf, dstest)
 trainer.train(args)
