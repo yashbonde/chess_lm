@@ -64,18 +64,69 @@ class BaseHFGPT(nn.Module):
 class PolicyHead(nn.Module):
     def __init__(self, config):
         super().__init__()
+        # first block
         self.attn = Attention(config.n_embd, config.n_ctx, config, scale = True)
         self.ln = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
         self.mlp = MLP(config.n_embd * 4, config)
+        
+        # second block
+        self.ln2 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
+        self.attn2 = Attention(config.n_embd, config.n_ctx, config, scale=True)
+        self.ln3 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
+        self.mlp2 = MLP(config.n_embd * 4, config)
+
+        # final head
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size)
         
     def forward(self, hidden_states):
-        # this is the Block
+        # first block
         attn_output = self.attn(hidden_states)[0]
         hidden_states = attn_output + hidden_states # residual connection
         feed_forward_hidden_states = self.mlp(self.ln(hidden_states))
         hidden_states = hidden_states + feed_forward_hidden_states # residual connection
+
+        # second block
+        attn_output = self.attn2(self.ln2(hidden_states))[0]
+        hidden_states = attn_output + hidden_states  # residual connection
+        feed_forward_hidden_states = self.mlp2(self.ln3(hidden_states))
+        hidden_states = hidden_states + feed_forward_hidden_states  # residual connection
+
+        # lm head
         return self.lm_head(hidden_states)
+
+
+class ValueHead(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        # first block
+        self.attn = Attention(config.n_embd, config.n_ctx, config, scale=True)
+        self.ln = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
+        self.mlp = MLP(config.n_embd * 4, config)
+
+        # second block
+        self.ln2 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
+        self.attn2 = Attention(config.n_embd, config.n_ctx, config, scale=True)
+        self.ln3 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
+        self.mlp2 = MLP(config.n_embd * 4, config)
+
+        # final head
+        self.val_head = nn.Linear(config.n_embd, 1)
+
+    def forward(self, hidden_states):
+        # first block
+        attn_output = self.attn(hidden_states)[0]
+        hidden_states = attn_output + hidden_states  # residual connection
+        feed_forward_hidden_states = self.mlp(self.ln(hidden_states))
+        hidden_states = hidden_states + feed_forward_hidden_states  # residual connection
+
+        # second block
+        attn_output = self.attn2(self.ln2(hidden_states))[0]
+        hidden_states = attn_output + hidden_states  # residual connection
+        feed_forward_hidden_states = self.mlp2(self.ln3(hidden_states))
+        hidden_states = hidden_states + feed_forward_hidden_states  # residual connection
+
+        # lm head
+        return self.val_head(hidden_states)
         
 
 class BetaChess(nn.Module):
@@ -83,18 +134,18 @@ class BetaChess(nn.Module):
         super().__init__()
         self.config = config
         config = ModelConfig(**vars(self.config))
-        config.n_layer = config.n_layer - 1
+        config.n_layer = config.n_layer - 2
         self.body = GPT2Model(config) # residual tower in AlphaZero
         
         # the policy head and value head are now similar to what is in AlphaZero
         self.policy_head = PolicyHead(config)
-        self.value_head = nn.Sequential(*[
-            MLP(config.n_embd, config),
-            nn.ReLU(),
-            nn.Linear(config.n_embd, 1),
-            nn.Tanh()
-        ])
-        # self.value_head = ValueHead(config)
+        # self.value_head = nn.Sequential(*[
+        #     MLP(config.n_embd, config),
+        #     nn.ReLU(),
+        #     nn.Linear(config.n_embd, 1),
+        #     nn.Tanh()
+        # ])
+        self.value_head = ValueHead(config)
 
     def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
         x = self.body(input_ids, return_dict = True, **gptkwargs)
@@ -102,16 +153,21 @@ class BetaChess(nn.Module):
         values = self.value_head(x.last_hidden_state)
         out = (logits, values)
         if loss is not None and value_targets is not None:            
+            # no you stupid categorical cross entropy is not the loss function used for training
             # Categorical cross entropy loss worked best for policy
-            logits_reshape = logits[:, :-1, :].contiguous().view(-1, logits.size(-1))
+            # loss_policy = F.cross_entropy(logits_reshape, targets)
+            
+            # the loss function for policy is loss_policy = -pi.T*log(p)
+            logits_log = F.log_softmax(logits[:, :-1, :].contiguous().view(-1, logits.size(-1)), dim = -1)
             targets = input_ids[:, 1:].contiguous().view(-1)
-            loss_policy = F.cross_entropy(logits_reshape, targets)
+            targets = F.one_hot(targets).float() # convert to one hot encodings
+            loss_policy = -logits_log.T.matmul(targets).mean()
 
             # MSE works best for value function
             loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
-            loss_value = loss_value.mean()
+            loss_value = -loss_value.mean()
 
-            loss = loss_policy + loss_value
+            loss = loss_policy + loss_value # weight regularisation added in 
 
             out = (logits, values, (loss, loss_policy, loss_value))
         return out
