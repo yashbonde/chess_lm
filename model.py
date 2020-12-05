@@ -37,9 +37,8 @@ class BaseHFGPT(nn.Module):
         super().__init__()
         self.config = config
         self.gpt = GPT2Model(config)
-        self.policy_head = nn.Linear(config.n_embd, config.vocab_size)
+        self.policy_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
         self.value_head = nn.Linear(config.n_embd, 1)
-        self.apply(self._init_weights)
 
     def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
         x = self.gpt(input_ids, return_dict = True, **gptkwargs)
@@ -95,6 +94,7 @@ class BetaChess(nn.Module):
             nn.Linear(config.n_embd, 1),
             nn.Tanh()
         ])
+        # self.value_head = ValueHead(config)
 
     def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
         x = self.body(input_ids, return_dict = True, **gptkwargs)
@@ -207,7 +207,7 @@ class Trainer:
             "warmup_perc": config.warmup_perc,
             "scheduler": config.scheduler,
         }
-        wandb.init(config=vars(hyperparameters))  # add all the configurations
+        wandb.init(config=hyperparameters)  # add all the configurations
         wandb.watch(model)
         
         # create step functions
@@ -281,9 +281,7 @@ class Trainer:
             for gs, d in zip(pbar_train, dl_train):
                 # total steps is now the primary iteration method
                 d = {k:v.to(self.device) for k,v in d.items()}
-                
-                epoch = total_steps // gs
-                pbar_train.set_description(f"[TRAIN] GS: {gs}, Epoch: {epoch}, Loss: {round(train_losses[-1], 5)}, Acc: {train_acc[-1]}")
+                pbar_train.set_description(f"[TRAIN] GS: {gs}, Loss: {round(train_losses[-1], 5)}, Acc: {train_acc[-1]}")
 
                 # get model results
                 (policy, values, loss) = model(loss=True, **d)
@@ -322,8 +320,6 @@ class Trainer:
                 optimizer.step()
                 if scheduler is not None:
                     scheduler.step()
-                    
-                wandb.log(log_dict)
 
                 # test if time has come
                 if gs > 0 and gs % config.test_every == 0:
@@ -367,8 +363,10 @@ class Trainer:
                     losses = np.mean(test_losses)
                     test_acc = np.mean(test_acc)
                     print(f"Loss: {losses:.3f}; Acc: {test_acc:.3f}", end = " ")
-                    wandb.log({"test_acc": test_acc, "test_loss": losses})
-
+                    log_dict.update({
+                        "test_loss": losses,
+                        "test_acc": test_acc
+                    })
                     if prev_train_loss > losses:
                         prev_train_loss = losses
                         no_loss_steps = 0
@@ -384,6 +382,7 @@ class Trainer:
                         
                     model.train()
 
+                wandb.log(log_dict)
                 if break_training:
                     print("Stopping training")
                     break

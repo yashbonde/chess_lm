@@ -35,6 +35,7 @@ This is the task list:
     - There's this CORS for API and static file code is not being read correctly. Someone else has to fix those.
 - [ ] Add more complicated search algorithm MCTS
   - ~~Basic version of MCTS included~~
+  - ~~Fix the bugs in MCTS basic~~ :P
   - Batching to improve speeds?
 
 
@@ -164,6 +165,7 @@ I need to come up with good metrics!
   - Implment multiple different learning rate schedulers, best still is linear-warmup with exponential decay. Supports "CosineAnnealingWarmRestarts", "OneCycleLR", "MultiStepLR", "NoamDecay", "CosineDecay"
   - Implement weight decay
   - Move Training logs to W&B (god bless this!)
+  - Reformulate my network to current RL standard, not my standard. Also change code according to it.
 
 ## Credits
 

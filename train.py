@@ -28,7 +28,9 @@ args.add_argument("--beta1", type = int, default = 0.9, help = "Adam.beta1")
 args.add_argument("--beta2", type = int, default = 0.95, help = "Adam.beta2")
 
 # train args
-args.add_argument("--scheduler", type=str, default="NoamDecay", help= "which LR scheduler to use of `CosineAnnealingWarmRestarts` or `OneCycleLR` or `MultiStepLR`")
+args.add_argument("--scheduler", type=str,help= "LR scheduler one of `CosineAnnealingWarmRestarts,"
+    "OneCycleLR, MultiStepLR, NoamDecay, CosineDecay, WarmupConstant`"
+)
 args.add_argument("--batch_size", type=int, default=400, help="batch size")
 args.add_argument("--split", type=float, default=0.01, help="ratio of data to use as testing")
 args.add_argument("--num_epochs", type=int, default=1, help="Number of epochs to train / finetune")

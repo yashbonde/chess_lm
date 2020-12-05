@@ -356,6 +356,23 @@ def update_node_bonus(root_node):
     return root_node
 
 
+def minimax(node, depth, _max=False):
+    # print(node.s, _max, depth)
+    if not depth or node.terminal:
+        return node.state_value
+
+    if _max:
+        # print()
+        val = -10000  # −∞
+        for child in node.children:
+            val = max(val, minimax(child, depth - 1, False))
+    else:
+        # print()
+        val = +10000  # −∞
+        for child in node.children:
+            val = min(val, minimax(child, depth - 1, True))
+    return val
+
 ################################################
 ####### Monte Carlo Tree Search ################
 ################################################
@@ -454,41 +471,11 @@ def print_mcts(root_node, level=0):
             ret += print_mcts(child, level + 1)
     return ret
 
-################################################
-####### Search #################################
-################################################
 
-def minimax(node, depth, _max = False):
-    """
-    function minimax(node, depth, maximizingPlayer) is
-        if depth = 0 or node is a terminal node then
-            return the heuristic value of node
-        if maximizingPlayer then
-            value := −∞
-            for each child of node do
-                value := max(value, minimax(child, depth − 1, FALSE))
-            return value
-        else (* minimizing player *)
-            value := +∞
-            for each child of node do
-                value := min(value, minimax(child, depth − 1, TRUE))
-            return value
-    """
-    # print(node.s, _max, depth)
-    if not depth or node.terminal:
-        return node.value
-    
-    if _max:
-        # print()
-        val = -10000  # −∞
-        for child in node.children:
-            val = max(val, minimax(child, depth - 1, False))
-    else:
-        # print()
-        val = +10000  # −∞
-        for child in node.children:
-            val = min(val, minimax(child, depth - 1, True))
-    return val
+def select_action(n, t=1):
+    counts = np.array([x.n for x in n.children])
+    policy = (counts ** (1/t)) / sum(counts ** (1/t))
+    return policy
 
 
 ################################################
@@ -497,7 +484,7 @@ def minimax(node, depth, _max = False):
 
 class Player():
     def __init__(self, config, save_path, vocab_path, model_class, search = "sample", depth = 1):
-        if search not in ["sample", "greedy", "random", "minimax"]:
+        if search not in ["sample", "greedy", "random", "minimax", "mcts"]:
             raise ValueError(f"Searching method: {search} not defined")
 
         self.search = search  # method used to determine the move
@@ -597,11 +584,10 @@ class Player():
             # softmax over legal moves, get the log-probabilities for legal moves
             lg_mask = logits.numpy()[legal_idx]
             lg_mask = softmax(lg_mask)
+        mv = '[GAME]' if not b.move_stack else str(b.move_stack[-1])[:4] # new game handle
 
         if self.search == "minimax": # use a minimax method to determine the best possible move
-            mv = '[GAME]' if not b.move_stack else str(b.move_stack[-1])[:4] # new game handle
-            root_node = Node(value = value, move = mv, p = 0., b = b)
-
+            root_node = Node(state_value = value, move = mv, p = 0., b = b)
             # generate tree for this node
             _st = time()
             # print("\nStarting tree generation ...", end = " ")
@@ -625,9 +611,25 @@ class Player():
                 ], key = lambda x: x[1]
             ) # Node object
             move_node = sorted_moves[-1][0]
-            value = move_node.value
+            value = move_node.state_value
             move = Move(move_node.move)
             conf = move_node.p
+
+        elif self.search == "mcts":
+            col = b.fen().split()[1]
+            col = "black" if col == "b" else "white"
+            root_node = Node(state_value=value, move=mv, p=0., b=b, color=col, rc=col)
+            mcts(
+                model=model,
+                root_node=root_node,
+                b=b,
+                depth=10,
+                vocab=vocab,
+                inv_vocab=inv_vocab,
+                sims=100
+            )
+            move_probab = select_action(root_node, 0.65)
+            move = self.better_choice(legal, move_probab, 1)[0]
 
         elif self.search == "sample":
             # no searching, make a choice based on probability distribution
@@ -656,18 +658,19 @@ if __name__ == "__main__":
         vocab_size = len(json.load(f))
     config = ModelConfig(
         vocab_size=vocab_size,
-        n_positions=85,
-        n_ctx=85,
+        n_positions=180,
+        n_ctx=180,
         n_embd=128,
         n_layer=30,
         n_head=8
     )
     player1 = Player(
         config,
-        "models/useful/a8/a8_14000.pt",
+        "models/useful/q1/q1_15000.pt",
         "assets/moves.json",
-        search="sample",
-        model_class = BetaChess
+        search="mcts",
+        depth=2,
+        model_class=BaseHFGPT
     )  # assume to be white
     config = ModelConfig(
         vocab_size=vocab_size,
