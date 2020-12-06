@@ -61,6 +61,23 @@ class BaseHFGPT(nn.Module):
         return out
 
 
+class Denorm(torch.nn.Module):
+    def __init__(self, normalized_shape, eps = 1e-5):
+        super().__init__()
+        normalized_shape = (normalized_shape,)
+        self.normalized_shape = tuple(normalized_shape)
+        self.eps = eps
+        self.elementwise_affine = True
+        self.weight = torch.nn.parameter.Parameter(torch.Tensor(*normalized_shape))
+        self.bias = torch.nn.parameter.Parameter(torch.Tensor(*normalized_shape))
+
+    def forward(self, x):
+        mu = x.mean()
+        var = x.var()
+        out = (x + mu) * (torch.sqrt(var + self.eps))
+        return out * self.weight + self.bias
+
+
 class PolicyHead(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -106,8 +123,8 @@ class ValueHead(nn.Module):
         # second block
         self.ln2 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
         self.attn2 = Attention(config.n_embd, config.n_ctx, config, scale=True)
-        self.ln3 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
-        self.mlp2 = MLP(config.n_embd * 4, config)
+        self.ln3 = Denorm(config.n_embd, eps=config.layer_norm_epsilon)
+        # self.mlp2 = MLP(config.n_embd * 4, config)
 
         # final head
         self.val_head = nn.Linear(config.n_embd, 1)
@@ -122,11 +139,11 @@ class ValueHead(nn.Module):
         # second block
         attn_output = self.attn2(self.ln2(hidden_states))[0]
         hidden_states = attn_output + hidden_states  # residual connection
-        feed_forward_hidden_states = self.mlp2(self.ln3(hidden_states))
-        hidden_states = hidden_states + feed_forward_hidden_states  # residual connection
+        # feed_forward_hidden_states = self.mlp2(self.ln3(hidden_states))
+        # hidden_states = hidden_states + feed_forward_hidden_states  # residual connection
 
         # lm head
-        return self.val_head(hidden_states)
+        return self.val_head(self.ln2(hidden_states))
         
 
 class BetaChess(nn.Module):
@@ -165,7 +182,7 @@ class BetaChess(nn.Module):
 
             # MSE works best for value function
             loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
-            loss_value = -loss_value.mean()
+            loss_value = loss_value.mean()
 
             loss = loss_policy + loss_value # weight regularisation added in 
 
