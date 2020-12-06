@@ -47,6 +47,7 @@ def make_move():
     print("move", move, game.board.fen())
     
     if done:
+        res = "You Win" if res == "win" else "Game Draw"
         response = make_response(jsonify(content = res))
         return response
 
