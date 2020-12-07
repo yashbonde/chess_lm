@@ -100,7 +100,7 @@ def parse_and_save_data(files, save_after, pid):
                 with open(lm_file, "w") as m, open(res_file, "w") as r:
                     print("Saving Files...", lm_file, res_file)
                     m.write("\n".join(seqs))
-                    r.write(" ".join(list(map(str, rseq))))
+                    r.write("\n".join(list(map(str, rseq))))
 
                 game_count_loaded += len(seqs)
                 seqs = []
@@ -116,7 +116,7 @@ def parse_and_save_data(files, save_after, pid):
         with open(lm_file, "w") as m, open(res_file, "w") as r:
             print("Saving Files...", lm_file, res_file)
             m.write("\n".join(seqs))
-            r.write(" ".join(list(map(str, rseq))))
+            r.write("\n".join(list(map(str, rseq))))
 
 
         game_count_loaded += len(seqs)

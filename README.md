@@ -76,7 +76,7 @@ while not done:
 
 ### Data
 
-There are two sources for all the games [links.txt](./assets/links.txt) which has pgnmentor files and **ALL** games from FICS and second [links2000.txt](./assets/links2000.txt) which has all the games where average ELO > 2000 from FICS datasets. I am using the second file now and use 5% testing split. To prepare your own data run the script `download.py` as follows:
+There are two sources for all the games [links.txt](./assets/links.txt) which has pgnmentor files and **ALL** games from FICS and second [links2000.txt](./assets/links2000.txt) which has all the games where average ELO > 2000 from FICS datasets. I am using the second file now and use 5% testing split. To prepare your own data run the script `download.py` as follows (**You will always have to create new links**):
 ```bash
 # Following timings are given for my system with `Xeon® E5-2620 v3` (24 cores)
 
