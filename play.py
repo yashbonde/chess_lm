@@ -22,7 +22,8 @@ config = ModelConfig(
     n_ctx=180,
     n_embd=128,
     n_layer=30,
-    n_head=8
+    n_head=8,
+    loss_method = "ce"
 )
 player = Player(
     config,

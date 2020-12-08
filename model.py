@@ -127,8 +127,10 @@ class ValueHead(nn.Module):
         self.act_mid = nn.ReLU()
 
         # final head
-        self.val_head = nn.Linear(config.n_embd, 1)
-        self.act = nn.Tanh()
+        if config.loss_methods == "mse":
+            self.val_head = nn.Linear(config.n_embd, 1)
+        elif config.loss_methods == "ce":
+            self.val_head = nn.Linear(config.n_embd, 3)
 
     def forward(self, hidden_states):
         # first block --> complete block
@@ -140,7 +142,7 @@ class ValueHead(nn.Module):
         # second block
         attn_output = self.attn2(self.ln2(hidden_states))[0]
         out =  self.val_head(self.act_mid(self.ln3(attn_output))) # value head
-        return self.act(out)
+        return out
         
 
 class BetaChess(nn.Module):
@@ -156,6 +158,7 @@ class BetaChess(nn.Module):
         self.value_head = ValueHead(config)
 
     def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
+        config = self.config
         x = self.body(input_ids, return_dict = True, **gptkwargs)
         logits = self.policy_head(x.last_hidden_state)
         values = self.value_head(x.last_hidden_state)
@@ -163,22 +166,49 @@ class BetaChess(nn.Module):
         if loss is not None and value_targets is not None:            
             # no you stupid categorical cross entropy is not the loss function used for training
             # Categorical cross entropy loss worked best for policy
-            # loss_policy = F.cross_entropy(logits_reshape, targets)
+            logits_reshape = logits[:, :-1, :].contiguous().view(-1, logits.size(-1))
+            targets = input_ids[:, 1:].contiguous().view(-1)
+            loss_policy = F.cross_entropy(logits_reshape, targets)
             
             # the loss function for policy is loss_policy = -pi.T*log(p)
-            logits_log = F.log_softmax(logits[:, :-1, :].contiguous().view(-1, logits.size(-1)), dim = -1)
-            targets = input_ids[:, 1:].contiguous().view(-1)
-            targets = F.one_hot(targets).float() # convert to one hot encodings
-            loss_policy = -logits_log.T.matmul(targets).mean()
+            # logits_log = F.log_softmax(logits[:, :-1, :].contiguous().view(-1, logits.size(-1)), dim = -1)
+            # targets = F.one_hot(targets).float() # convert to one hot encodings
+            # loss_policy = -logits_log.T.matmul(targets).mean()
 
-            # MSE works best for value function
-            loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
-            loss_value = loss_value.mean()
+            if config.loss_method == "mse":
+                # MSE works best for value function
+                loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
+                loss_value = loss_value.mean()
+            
+            elif config.loss_method == "ce":
+                value_reshape = values[:, :-1].contiguous().view(-1, 3)
+                value_targets = value_targets[:, 1:].contiguous().view(-1)
+                loss_value = F.cross_entropy(value_reshape, value_targets)
 
             loss = loss_policy + loss_value # weight regularisation added in 
 
             out = (logits, values, (loss, loss_policy, loss_value))
         return out
+
+
+class ModelConfig:
+    activation_function= "relu"
+    resid_pdrop = 0.0
+    embd_pdrop = 0.0
+    attn_pdrop = 0.0
+    
+    def __init__(self, **kwargs):
+        self.attrs = ["vocab_size", "n_positions", "n_ctx", "n_embd", "n_layer",
+            "n_head", "activation_function", "resid_pdrop", "embd_pdrop", "attn_pdrop",]
+        for k,v in kwargs.items():
+            setattr(self, k, v)
+        assert hasattr(self, "loss_method"), "Provide loss method for calculation"
+
+    def __repr__(self):
+        return "---- MODEL CONFIGURATION ----\n" + \
+            "\n".join([
+                f"{k}\t{getattr(self, k)}" for k in list(set(self.attrs))
+            ]) + "\n"
 
 # --- helper functions --- #
 def init_weights(module):
@@ -265,6 +295,7 @@ class Trainer:
 
     def train(self, args):
         model, config = self.model, self.config
+        model_config = model.config
         train_data = self.train_dataset
         test_data = self.test_dataset
         num_batches = len(train_data) // config.batch_size + int(len(train_data) % config.batch_size != 0)
@@ -366,6 +397,8 @@ class Trainer:
                 move_acc /= targets.size(0)
                 train_acc.append(move_acc)
 
+                    
+
                 # add to tensorboard
                 tb.add_scalar("train/loss_total", loss_total.item(), global_step=gs, walltime=time.time())
                 tb.add_scalar("train/loss_policy", loss_policy.item(), global_step=gs, walltime=time.time())
@@ -377,6 +410,16 @@ class Trainer:
                     "loss_value": loss_value.item(),
                     "move_acc": move_acc
                 }
+                
+                # calculate mse error if softmax activation used
+                if model_config.loss_method == "ce":
+                    with torch.no_grad():
+                        values = F.softmax(values[:, :-1, :], dim=-1).contiguous().view(-1, 3)  # [B, N, 3]
+                        values = values.dot(torch.Tensor([-1, 0, 1], device = values.device).float())
+                        mse = (values - d["value_targets"][:,1:].contiguous().view(-1)) ** 2
+                        log_dict.update({"regression_loss": mse.item()})
+
+                
                 if scheduler is not None:
                     last_lr = scheduler.get_last_lr()[0]
                     tb.add_scalar("train/lr", last_lr, global_step=gs, walltime=time.time())
@@ -411,7 +454,7 @@ class Trainer:
                             loss_total = loss[0].mean() # gather
                             loss_policy = loss[1].mean() # gather
                             loss_value = loss[2].mean() # gather
-                            test_losses.append(loss_total.item())
+                            test_losses.append([loss_total.item()])
 
                             # calculate move accuracy
                             policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
@@ -421,6 +464,12 @@ class Trainer:
                             move_acc /= targets.size(0)
                             test_acc.append(move_acc)
 
+                            if model_config.loss_method == "ce":
+                                values = F.softmax(values[:, :-1, :], dim=-1).contiguous().view(-1, 3)  # [B, N, 3]
+                                values = values.dot(torch.Tensor([-1, 0, 1], device = values.device).float())
+                                mse = (values - d["value_targets"][:,1:].contiguous().view(-1)) ** 2
+                                test_losses[-1].append(mse)
+
                             # add to tensorboard
                             tb.add_scalar("test/loss_total", loss_total.item(), global_step=gs, walltime=time.time())
                             tb.add_scalar("test/loss_policy", loss_policy.item(), global_step=gs, walltime=time.time())
@@ -428,13 +477,17 @@ class Trainer:
                             tb.add_scalar("test/move_acc", move_acc, global_step=gs, walltime=time.time())
 
                     # now testing is complete so see the results, save or stop if needed
-                    losses = np.mean(test_losses)
+                    test_losses = np.array(test_losses)
+                    losses = np.mean(test_losses[:, 0])
                     test_acc = np.mean(test_acc)
                     print(f"Loss: {losses:.3f}; Acc: {test_acc:.3f}", end = " ")
                     log_dict.update({
                         "test_loss": losses,
                         "test_acc": test_acc
                     })
+                    if model_config.loss_method == "ce":
+                        log_dict.update({"regression_loss": np.mean(test_losses[:, 1])})
+
                     if prev_train_loss > losses:
                         prev_train_loss = losses
                         no_loss_steps = 0

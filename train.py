@@ -62,6 +62,7 @@ dataConfig = DataConfig(
     buffer= args.buffer,
 )
 dstrain, dstest = get_datasets(dataConfig, args.split)
+print(dataConfig)
 
 modelConfig = ModelConfig(
     vocab_size = len(dstrain.m2id),
@@ -75,6 +76,7 @@ modelConfig = ModelConfig(
     embd_pdrop=0.0,
     attn_pdrop=0.0,
 )
+print(modelConfig)
 if args.model == "beta":
     model = BetaChess(modelConfig)
 elif args.model == "base":
