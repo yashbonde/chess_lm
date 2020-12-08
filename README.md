@@ -137,7 +137,18 @@ python train.py --model=<model-name>
 
 ### Training Logs
 
-This is the new training logs on new machine (2x2080Ti). With the new datasets we have `620683696` moves and `7477392` games giving `83` moves per turn, considering this, the new models will be trained with a sequence length of `85`, lowering the compute required and faster training. I have now started using weights and biases see all the details on the [project page](https://wandb.ai/yashbonde/blindfold-chess), current best model is `devoted-glade-16`.
+This is the new training logs on a variety of machines (2x2080Ti). With the new datasets we have `620683696` moves and `7477392` games giving `83` moves per turn, considering this, the new models will be trained with a sequence length of `85`, lowering the compute required and faster training. I have now started using weights and biases see all the details on the [project page](https://wandb.ai/yashbonde/blindfold-chess), current best model is `devoted-glade-16`.
+
+The problem lies in the model learning where `loss_value` eventually settles at 0.85 which means that the values and predictions collapse to 0 as below:
+```
+zs = np.zeros((res.shape[0] * res.shape[1]))
+loss_z = np.mean((zs - res.reshape(-1)) ** 2)
+loss_z # 0.8581690492029814
+```
+
+Lessons:
+- Which means during the training we can try with ignoring the weight decay and improving the learning rate.
+- Larger learning rate have no significant advantage
 
 ## Metrics
 

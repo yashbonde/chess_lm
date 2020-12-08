@@ -23,20 +23,20 @@ args.add_argument("--n_head", type = int, default = 8, help = "number of heads f
 args.add_argument("--model", type = str, default = "beta", help = "which model to train, select from `base`, `beta`")
 
 # optim settings
-args.add_argument("--lr", type = int, default = 0.0004, help = "learning rate")
-args.add_argument("--beta1", type = int, default = 0.9, help = "Adam.beta1")
-args.add_argument("--beta2", type = int, default = 0.95, help = "Adam.beta2")
+args.add_argument("--lr", type = int, default = 1e-6, help = "learning rate")
+args.add_argument("--beta1", type = int, default = 0.9, help = "Adam.beta1") # momentum for first gradient
+args.add_argument("--beta2", type = int, default = 0.999, help = "Adam.beta2") # momentum for second moment (var)
 
 # train args
-args.add_argument("--scheduler", type=str,help= "LR scheduler one of `CosineAnnealingWarmRestarts,"
+args.add_argument("--scheduler", type=str, default = None, help= "LR scheduler one of `CosineAnnealingWarmRestarts,"
     "OneCycleLR, MultiStepLR, NoamDecay, CosineDecay, WarmupConstant`"
 )
-args.add_argument("--batch_size", type=int, default=400, help="batch size")
+args.add_argument("--batch_size", type=int, default=920, help="batch size")
 args.add_argument("--split", type=float, default=0.01, help="ratio of data to use as testing")
 args.add_argument("--num_epochs", type=int, default=1, help="Number of epochs to train / finetune")
 args.add_argument("--save_folder", type=str, default="models", help="Folder to save model to")
 args.add_argument("--name", type=str, default="cgpt", help="Saved name to have filepath `<name>.pt`")
-args.add_argument("--test_every", type=int, default=500, help="Test after these global steps")
+args.add_argument("--test_every", type=int, default=1000, help="Test after these global steps")
 args.add_argument("--patience", type=int, default=3, help="Early stopping partience value")
 args = args.parse_args()
 

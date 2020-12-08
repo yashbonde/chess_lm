@@ -37,13 +37,13 @@ class BaseHFGPT(nn.Module):
         super().__init__()
         self.config = config
         self.gpt = GPT2Model(config)
-        self.policy_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
+        self.policy_head = nn.Linear(config.n_embd, config.vocab_size)
         self.value_head = nn.Linear(config.n_embd, 1)
 
     def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
         x = self.gpt(input_ids, return_dict = True, **gptkwargs)
         logits = self.policy_head(x.last_hidden_state)
-        values = self.value_head(x.last_hidden_state)
+        values = F.tanh(self.value_head(x.last_hidden_state))
         out = (logits, values)
         if loss is not None and value_targets is not None:            
             # Categorical cross entropy loss worked best for policy
@@ -124,13 +124,14 @@ class ValueHead(nn.Module):
         self.ln2 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
         self.attn2 = Attention(config.n_embd, config.n_ctx, config, scale=True)
         self.ln3 = Denorm(config.n_embd, eps=config.layer_norm_epsilon)
-        # self.mlp2 = MLP(config.n_embd * 4, config)
+        self.act_mid = nn.ReLU()
 
         # final head
         self.val_head = nn.Linear(config.n_embd, 1)
+        self.act = nn.Tanh()
 
     def forward(self, hidden_states):
-        # first block
+        # first block --> complete block
         attn_output = self.attn(hidden_states)[0]
         hidden_states = attn_output + hidden_states  # residual connection
         feed_forward_hidden_states = self.mlp(self.ln(hidden_states))
@@ -138,12 +139,8 @@ class ValueHead(nn.Module):
 
         # second block
         attn_output = self.attn2(self.ln2(hidden_states))[0]
-        hidden_states = attn_output + hidden_states  # residual connection
-        # feed_forward_hidden_states = self.mlp2(self.ln3(hidden_states))
-        # hidden_states = hidden_states + feed_forward_hidden_states  # residual connection
-
-        # lm head
-        return self.val_head(self.ln2(hidden_states))
+        out =  self.val_head(self.act_mid(self.ln3(attn_output))) # value head
+        return self.act(out)
         
 
 class BetaChess(nn.Module):
@@ -156,12 +153,6 @@ class BetaChess(nn.Module):
         
         # the policy head and value head are now similar to what is in AlphaZero
         self.policy_head = PolicyHead(config)
-        # self.value_head = nn.Sequential(*[
-        #     MLP(config.n_embd, config),
-        #     nn.ReLU(),
-        #     nn.Linear(config.n_embd, 1),
-        #     nn.Tanh()
-        # ])
         self.value_head = ValueHead(config)
 
     def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
@@ -192,10 +183,10 @@ class BetaChess(nn.Module):
 # --- helper functions --- #
 def init_weights(module):
     if isinstance(module, (nn.Linear, nn.Embedding)):
-        module.weight.data.normal_(mean=0.0, std=0.02)
+        module.weight.data.normal_(mean=0.0, std=0.2)
         if isinstance(module, nn.Linear) and module.bias is not None:
             module.bias.data.zero_()
-    elif isinstance(module, nn.LayerNorm):
+    elif isinstance(module, (nn.LayerNorm, Denorm)):
         module.bias.data.zero_()
         module.weight.data.fill_(1.0)
 
@@ -212,11 +203,14 @@ def configure_optimizers(model, train_config):
     decay = set()
     no_decay = set()
     whitelist_weight_modules = (torch.nn.Linear, Conv1D, Attention)
-    blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
+    blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding, Denorm) # add denorm here
     for mn, m in model.named_modules():
         for pn, p in m.named_parameters():
             fpn = '%s.%s' % (mn, pn) if mn else pn # full param name
             
+            if "ValueHead" in fpn: # no decay for value head layers
+                no_decay.add(fpn)
+
             pn_type = pn.split(".")[-1]
             if pn_type == 'bias':
                 # all biases will not be decayed
@@ -232,6 +226,7 @@ def configure_optimizers(model, train_config):
     param_dict = {pn: p for pn, p in model.named_parameters()}
     inter_params = decay & no_decay
     union_params = decay | no_decay
+    
     assert len(inter_params) == 0, "parameters %s made it into both decay/no_decay sets!" % (str(inter_params), )
     assert len(param_dict.keys() - union_params) == 0, "parameters %s were not separated into either decay/no_decay set!" \
                                                 % (str(param_dict.keys() - union_params), )
@@ -284,13 +279,13 @@ class Trainer:
         wandb.watch(model)
         
         # create step functions
-        # optimizer = torch.optim.Adam(
-        #     model.parameters(),
-        #     lr = config.lr,
-        #     betas = config.betas
-        # )
         model.apply(init_weights)
-        optimizer = configure_optimizers(model, config) # get AdamW optimiser for this model
+        optimizer = torch.optim.Adam(
+            model.parameters(),
+            lr = config.lr,
+            betas = config.betas
+        )
+#         optimizer = configure_optimizers(model, config) # get AdamW optimiser for this model
 
         # setup correct scheduler
         if config.scheduler == "CosineAnnealingWarmRestarts":
@@ -325,7 +320,7 @@ class Trainer:
                 if current_step < warmup:
                     return float(current_step) / float(max(1, warmup))
                 progress = float(current_step - warmup) / float(max(1, total_steps - warmup))
-                return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress))) # 0.5 * 2.0 = 1.0
+                return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress))) # * 1000
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
         elif config.scheduler == "WarmupConstant":
@@ -333,7 +328,7 @@ class Trainer:
             def lr_lambda(current_step: int):
                 if current_step < warmup:
                     return float(current_step) / float(max(1.0, warmup))
-                return 1.0
+                return 1.0 # * 10
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
         else:
