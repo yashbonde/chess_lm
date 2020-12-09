@@ -28,10 +28,10 @@ args.add_argument("--beta1", type = int, default = 0.9, help = "Adam.beta1") # m
 args.add_argument("--beta2", type = int, default = 0.999, help = "Adam.beta2") # momentum for second moment (var)
 
 # train args
-args.add_argument("--scheduler", type=str, default = None, help= "LR scheduler one of `CosineAnnealingWarmRestarts,"
+args.add_argument("--scheduler", type=str, default = "CosineDecay", help= "LR scheduler one of `CosineAnnealingWarmRestarts,"
     "OneCycleLR, MultiStepLR, NoamDecay, CosineDecay, WarmupConstant`"
 )
-args.add_argument("--batch_size", type=int, default=920, help="batch size")
+args.add_argument("--batch_size", type=int, default=400, help="batch size")
 args.add_argument("--split", type=float, default=0.01, help="ratio of data to use as testing")
 args.add_argument("--num_epochs", type=int, default=1, help="Number of epochs to train / finetune")
 args.add_argument("--save_folder", type=str, default="models", help="Folder to save model to")
@@ -71,10 +71,7 @@ modelConfig = ModelConfig(
     n_embd=args.n_embd,
     n_layer=args.n_layer,
     n_head=args.n_head,
-    activation_function="relu",
-    resid_pdrop=0.0,
-    embd_pdrop=0.0,
-    attn_pdrop=0.0,
+    loss_method = "ce", # add loss method for values
 )
 print(modelConfig)
 if args.model == "beta":
@@ -100,4 +97,5 @@ trainerConf = TrainerConfig(
     warmup_perc = 0.14 # 14% of steps are used for warmup
 )
 trainer = Trainer(model, dstrain, trainerConf, dstest)
+print(trainerConf)
 trainer.train(args)

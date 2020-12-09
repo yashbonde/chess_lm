@@ -16,7 +16,8 @@ from torch.nn import functional as F
 from torch.utils.data import IterableDataset, DataLoader, Dataset
 from torch.utils.tensorboard import SummaryWriter
 
-from transformers import GPT2Model, GPT2Config as ModelConfig
+from transformers import PretrainedConfig
+from transformers import GPT2Model
 from transformers.models.gpt2.modeling_gpt2 import MLP, Attention, Conv1D
 
 # ---- helper function ----- #
@@ -38,9 +39,15 @@ class BaseHFGPT(nn.Module):
         self.config = config
         self.gpt = GPT2Model(config)
         self.policy_head = nn.Linear(config.n_embd, config.vocab_size)
-        self.value_head = nn.Linear(config.n_embd, 1)
+
+        # final head
+        if config.loss_method == "mse":
+            self.val_head = nn.Linear(config.n_embd, 1)
+        elif config.loss_method == "ce":
+            self.val_head = nn.Linear(config.n_embd, 3)
 
     def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
+        config = self.config
         x = self.gpt(input_ids, return_dict = True, **gptkwargs)
         logits = self.policy_head(x.last_hidden_state)
         values = F.tanh(self.value_head(x.last_hidden_state))
@@ -51,9 +58,15 @@ class BaseHFGPT(nn.Module):
             targets = input_ids[:, 1:].contiguous().view(-1)
             loss_policy = F.cross_entropy(logits_reshape, targets)
 
-            # MSE works best for value function
-            loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
-            loss_value = loss_value.mean()
+            if config.loss_method == "mse":
+                # MSE works best for value function
+                loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
+                loss_value = loss_value.mean()
+            
+            elif config.loss_method == "ce":
+                value_reshape = values[:, :-1].contiguous().view(-1, 3)
+                value_targets = value_targets[:, 1:].contiguous().view(-1) + 1 # [-1, 0, 1] --> [0, 1, 2]
+                loss_value = F.cross_entropy(value_reshape, value_targets.long())
 
             loss = loss_policy + loss_value
 
@@ -123,13 +136,13 @@ class ValueHead(nn.Module):
         # second block
         self.ln2 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
         self.attn2 = Attention(config.n_embd, config.n_ctx, config, scale=True)
-        self.ln3 = Denorm(config.n_embd, eps=config.layer_norm_epsilon)
+        self.ln3 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
         self.act_mid = nn.ReLU()
 
         # final head
-        if config.loss_methods == "mse":
+        if config.loss_method == "mse":
             self.val_head = nn.Linear(config.n_embd, 1)
-        elif config.loss_methods == "ce":
+        elif config.loss_method == "ce":
             self.val_head = nn.Linear(config.n_embd, 3)
 
     def forward(self, hidden_states):
@@ -182,8 +195,8 @@ class BetaChess(nn.Module):
             
             elif config.loss_method == "ce":
                 value_reshape = values[:, :-1].contiguous().view(-1, 3)
-                value_targets = value_targets[:, 1:].contiguous().view(-1)
-                loss_value = F.cross_entropy(value_reshape, value_targets)
+                value_targets = value_targets[:, 1:].contiguous().view(-1) + 1 # [-1, 0, 1] --> [0, 1, 2]
+                loss_value = F.cross_entropy(value_reshape, value_targets.long())
 
             loss = loss_policy + loss_value # weight regularisation added in 
 
@@ -191,15 +204,21 @@ class BetaChess(nn.Module):
         return out
 
 
-class ModelConfig:
+class ModelConfig(PretrainedConfig):
     activation_function= "relu"
     resid_pdrop = 0.0
     embd_pdrop = 0.0
     attn_pdrop = 0.0
+    n_inner = None
+    layer_norm_epsilon=1e-5
+    initializer_range=0.2
+    use_cache = True
     
     def __init__(self, **kwargs):
+        super().__init__(bos_token_id=0, eos_token_id=0)
         self.attrs = ["vocab_size", "n_positions", "n_ctx", "n_embd", "n_layer",
-            "n_head", "activation_function", "resid_pdrop", "embd_pdrop", "attn_pdrop",]
+                      "n_head", "activation_function", "resid_pdrop", "embd_pdrop",
+                      "attn_pdrop", "layer_norm_epsilon", "n_inner", "initializer_range"]
         for k,v in kwargs.items():
             setattr(self, k, v)
         assert hasattr(self, "loss_method"), "Provide loss method for calculation"
@@ -295,7 +314,7 @@ class Trainer:
 
     def train(self, args):
         model, config = self.model, self.config
-        model_config = model.config
+        model_config = self.model.module.config if hasattr(self.model, "module") else self.model.config
         train_data = self.train_dataset
         test_data = self.test_dataset
         num_batches = len(train_data) // config.batch_size + int(len(train_data) % config.batch_size != 0)
@@ -311,12 +330,12 @@ class Trainer:
         
         # create step functions
         model.apply(init_weights)
-        optimizer = torch.optim.Adam(
-            model.parameters(),
-            lr = config.lr,
-            betas = config.betas
-        )
-#         optimizer = configure_optimizers(model, config) # get AdamW optimiser for this model
+#         optimizer = torch.optim.Adam(
+#             model.parameters(),
+#             lr = config.lr,
+#             betas = config.betas
+#         )
+        optimizer = configure_optimizers(model, config) # get AdamW optimiser for this model
 
         # setup correct scheduler
         if config.scheduler == "CosineAnnealingWarmRestarts":
@@ -344,6 +363,7 @@ class Trainer:
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
                 lr_lambda=lambda e: 100 * (128 ** -0.5) * min(max(1, e) ** -0.5, e * (warmup ** -1.5))
             )
+            print("Using NoamDecay scheduler, warmup:", warmup, scheduler)
 
         elif config.scheduler == "CosineDecay":
             warmup = int(config.warmup_perc * total_steps)
@@ -353,6 +373,7 @@ class Trainer:
                 progress = float(current_step - warmup) / float(max(1, total_steps - warmup))
                 return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress))) # * 1000
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+            print("Using CosineDecay scheduler, warmup:", warmup, scheduler)
 
         elif config.scheduler == "WarmupConstant":
             warmup = int(config.warmup_perc * total_steps)
@@ -361,6 +382,7 @@ class Trainer:
                     return float(current_step) / float(max(1.0, warmup))
                 return 1.0 # * 10
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+            print("Using WarmupConstant scheduler, warmup:", warmup, scheduler)
 
         else:
             scheduler = None
@@ -397,8 +419,6 @@ class Trainer:
                 move_acc /= targets.size(0)
                 train_acc.append(move_acc)
 
-                    
-
                 # add to tensorboard
                 tb.add_scalar("train/loss_total", loss_total.item(), global_step=gs, walltime=time.time())
                 tb.add_scalar("train/loss_policy", loss_policy.item(), global_step=gs, walltime=time.time())
@@ -413,13 +433,12 @@ class Trainer:
                 
                 # calculate mse error if softmax activation used
                 if model_config.loss_method == "ce":
-                    with torch.no_grad():
-                        values = F.softmax(values[:, :-1, :], dim=-1).contiguous().view(-1, 3)  # [B, N, 3]
-                        values = values.dot(torch.Tensor([-1, 0, 1], device = values.device).float())
-                        mse = (values - d["value_targets"][:,1:].contiguous().view(-1)) ** 2
-                        log_dict.update({"regression_loss": mse.item()})
+                    values = F.softmax(values[:, :-1, :], dim=-1).contiguous().view(-1, 3)  # [B, N, 3]
+                    values = values.matmul(torch.Tensor([-1, 0, 1]).to(d["value_targets"].device).float())
+                    mse = (values - d["value_targets"][:,1:].contiguous().view(-1)) ** 2
+                    log_dict.update({"regression_loss": mse.mean().item()})
 
-                
+
                 if scheduler is not None:
                     last_lr = scheduler.get_last_lr()[0]
                     tb.add_scalar("train/lr", last_lr, global_step=gs, walltime=time.time())
@@ -466,9 +485,9 @@ class Trainer:
 
                             if model_config.loss_method == "ce":
                                 values = F.softmax(values[:, :-1, :], dim=-1).contiguous().view(-1, 3)  # [B, N, 3]
-                                values = values.dot(torch.Tensor([-1, 0, 1], device = values.device).float())
+                                values = values.matmul(torch.Tensor([-1, 0, 1]).to(d["value_targets"].device).float())
                                 mse = (values - d["value_targets"][:,1:].contiguous().view(-1)) ** 2
-                                test_losses[-1].append(mse)
+                                test_losses[-1].append(mse.mean().item())
 
                             # add to tensorboard
                             tb.add_scalar("test/loss_total", loss_total.item(), global_step=gs, walltime=time.time())
@@ -486,7 +505,7 @@ class Trainer:
                         "test_acc": test_acc
                     })
                     if model_config.loss_method == "ce":
-                        log_dict.update({"regression_loss": np.mean(test_losses[:, 1])})
+                        log_dict.update({"test_regression_loss": np.mean(test_losses[:, 1])})
 
                     if prev_train_loss > losses:
                         prev_train_loss = losses
@@ -524,17 +543,8 @@ class TrainerConfig:
 
     def __init__(self, **kwargs):
         self.attrs = [
-            "num_epochs",
-            "batch_size",
-            "learning_rate",
-            "betas",
-            "grad_norm_clip",
-            "num_workers",
-            "ckpt_path",
-            "tb_path",
-            "patience",
-            "test_every",
-            "scheduler"
+            "num_epochs", "batch_size", "lr", "betas", "grad_norm_clip", "num_workers",
+            "ckpt_path", "tb_path", "patience", "test_every", "scheduler", "weight_decay"
         ]
         for k,v in kwargs.items():
             setattr(self, k, v)
@@ -778,15 +788,13 @@ class DataConfig:
     buffer= None
 
     def __init__(self, **kwargs):
-        self.attrs = []
+        self.attrs = ["lm", "rf", "m2id", "maxlen", "buffer"]
         for k,v in kwargs.items():
             setattr(self, k, v)
             self.attrs.append(k)
 
     def __repr__(self):
         return "---- DATA CONFIGURATION ----\n" + \
-            "\n".join([f"{k}\t{getattr(self, k)}" for k in list(set([
-                "lm", "rm", "m2id", "maxlen", "buffer"
-            ] + self.attrs))
+            "\n".join([f"{k}\t{getattr(self, k)}" for k in list(set(self.attrs))
         ]) + "\n"
 
