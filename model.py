@@ -50,7 +50,7 @@ class BaseHFGPT(nn.Module):
         config = self.config
         x = self.gpt(input_ids, return_dict = True, **gptkwargs)
         logits = self.policy_head(x.last_hidden_state)
-        values = F.tanh(self.value_head(x.last_hidden_state))
+        values = self.value_head(x.last_hidden_state)
         out = (logits, values)
         if loss is not None and value_targets is not None:            
             # Categorical cross entropy loss worked best for policy
@@ -60,6 +60,7 @@ class BaseHFGPT(nn.Module):
 
             if config.loss_method == "mse":
                 # MSE works best for value function
+                values = F.tanh(values)
                 loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
                 loss_value = loss_value.mean()
             
@@ -103,7 +104,6 @@ class PolicyHead(nn.Module):
         self.ln2 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
         self.attn2 = Attention(config.n_embd, config.n_ctx, config, scale=True)
         self.ln3 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
-        self.mlp2 = MLP(config.n_embd * 4, config)
 
         # final head
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size)
@@ -117,12 +117,9 @@ class PolicyHead(nn.Module):
 
         # second block
         attn_output = self.attn2(self.ln2(hidden_states))[0]
-        hidden_states = attn_output + hidden_states  # residual connection
-        feed_forward_hidden_states = self.mlp2(self.ln3(hidden_states))
-        hidden_states = hidden_states + feed_forward_hidden_states  # residual connection
-
-        # lm head
-        return self.lm_head(hidden_states)
+        hidden_states = self.ln3(attn_output + hidden_states) # residual connection
+        out = self.lm_head(hidden_states)
+        return out
 
 
 class ValueHead(nn.Module):
@@ -148,13 +145,14 @@ class ValueHead(nn.Module):
     def forward(self, hidden_states):
         # first block --> complete block
         attn_output = self.attn(hidden_states)[0]
-        hidden_states = attn_output + hidden_states  # residual connection
+        hidden_states = attn_output + hidden_states # residual connection
         feed_forward_hidden_states = self.mlp(self.ln(hidden_states))
-        hidden_states = hidden_states + feed_forward_hidden_states  # residual connection
+        hidden_states = hidden_states + feed_forward_hidden_states # residual connection
 
         # second block
         attn_output = self.attn2(self.ln2(hidden_states))[0]
-        out =  self.val_head(self.act_mid(self.ln3(attn_output))) # value head
+        hidden_states = self.ln3(hidden_states + attn_output) # residual connection
+        out =  self.val_head(hidden_states) # value head
         return out
         
 
@@ -190,6 +188,7 @@ class BetaChess(nn.Module):
 
             if config.loss_method == "mse":
                 # MSE works best for value function
+                values = F.tanh(values)
                 loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
                 loss_value = loss_value.mean()
             
@@ -204,7 +203,7 @@ class BetaChess(nn.Module):
         return out
 
 
-class ValueOnlyNetwork():
+class ValueOnlyNetwork(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -212,18 +211,20 @@ class ValueOnlyNetwork():
 
         # final head
         if config.loss_method == "mse":
-            self.val_head = nn.Linear(config.n_embd, 1)
+            self.value_head = nn.Linear(config.n_embd, 1)
         elif config.loss_method == "ce":
-            self.val_head = nn.Linear(config.n_embd, 3)
+            self.value_head = nn.Linear(config.n_embd, 3)
 
     def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
+        print("asdasdfasdfasdfas", input_ids.size())
         config = self.config
         x = self.gpt(input_ids, return_dict = True, **gptkwargs)
-        values = F.tanh(self.value_head(x.last_hidden_state))
+        values = self.value_head(x.last_hidden_state)
         out = (None, values)
         if loss is not None and value_targets is not None:            
             if config.loss_method == "mse":
                 # MSE works best for value function
+                values = F.tanh(values)
                 loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
                 loss_value = loss_value.mean()
             
@@ -252,7 +253,8 @@ class ModelConfig(PretrainedConfig):
         super().__init__(bos_token_id=0, eos_token_id=0)
         self.attrs = ["vocab_size", "n_positions", "n_ctx", "n_embd", "n_layer",
                       "n_head", "activation_function", "resid_pdrop", "embd_pdrop",
-                      "attn_pdrop", "layer_norm_epsilon", "n_inner", "initializer_range"]
+                      "attn_pdrop", "layer_norm_epsilon", "n_inner", "initializer_range",
+                      "loss_method"]
         for k,v in kwargs.items():
             setattr(self, k, v)
         assert hasattr(self, "loss_method"), "Provide loss method for calculation"
@@ -440,7 +442,7 @@ class Trainer:
 
                 # get model results
                 (policy, values, loss) = model(loss=True, **d)
-                loss_total = loss[0].mean().item() # gather
+                loss_total = loss[0].mean() # gather
                 if not isinstance(loss[1], int):
                     loss_policy = loss[1].mean().item() # gather
                 else:
@@ -515,7 +517,7 @@ class Trainer:
                             else:
                                 loss_policy = -1
                             loss_value = loss[2].mean().item()  # gather
-                            train_losses.append(loss_total)
+                            test_losses.append([loss_total])
 
                             # calculate move accuracy
                             move_acc = 0
@@ -525,7 +527,7 @@ class Trainer:
                                 targets = d["input_ids"][:, 1:].contiguous().view(-1)
                                 move_acc = sum(targets == policy).item()
                                 move_acc /= targets.size(0)
-                                train_acc.append(move_acc)
+                                test_acc.append(move_acc)
 
                             if model_config.loss_method == "ce":
                                 values = F.softmax(values[:, :-1, :], dim=-1).contiguous().view(-1, 3)  # [B, N, 3]
