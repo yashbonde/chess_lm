@@ -204,6 +204,40 @@ class BetaChess(nn.Module):
         return out
 
 
+class ValueOnlyNetwork():
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.gpt = GPT2Model(config)
+
+        # final head
+        if config.loss_method == "mse":
+            self.val_head = nn.Linear(config.n_embd, 1)
+        elif config.loss_method == "ce":
+            self.val_head = nn.Linear(config.n_embd, 3)
+
+    def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
+        config = self.config
+        x = self.gpt(input_ids, return_dict = True, **gptkwargs)
+        values = F.tanh(self.value_head(x.last_hidden_state))
+        out = (None, values)
+        if loss is not None and value_targets is not None:            
+            if config.loss_method == "mse":
+                # MSE works best for value function
+                loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
+                loss_value = loss_value.mean()
+            
+            elif config.loss_method == "ce":
+                value_reshape = values[:, :-1].contiguous().view(-1, 3)
+                value_targets = value_targets[:, 1:].contiguous().view(-1) + 1 # [-1, 0, 1] --> [0, 1, 2]
+                loss_value = F.cross_entropy(value_reshape, value_targets.long())
+
+            loss = loss_value
+
+            out = (None, values, (loss, 0, loss_value))
+        return out
+
+
 class ModelConfig(PretrainedConfig):
     activation_function= "relu"
     resid_pdrop = 0.0
@@ -406,28 +440,33 @@ class Trainer:
 
                 # get model results
                 (policy, values, loss) = model(loss=True, **d)
-                loss_total = loss[0].mean() # gather
-                loss_policy = loss[1].mean() # gather
-                loss_value = loss[2].mean() # gather
+                loss_total = loss[0].mean().item() # gather
+                if not isinstance(loss[1], int):
+                    loss_policy = loss[1].mean().item() # gather
+                else:
+                    loss_policy = -1
+                loss_value = loss[2].mean().item()  # gather
                 train_losses.append(loss_total.item())
 
                 # calculate move accuracy
-                policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
-                policy = torch.argmax(policy, dim=-1)
-                targets = d["input_ids"][:, 1:].contiguous().view(-1)
-                move_acc = sum(targets == policy).item()
-                move_acc /= targets.size(0)
-                train_acc.append(move_acc)
+                move_acc = 0
+                if policy is not None:
+                    policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
+                    policy = torch.argmax(policy, dim=-1)
+                    targets = d["input_ids"][:, 1:].contiguous().view(-1)
+                    move_acc = sum(targets == policy).item()
+                    move_acc /= targets.size(0)
+                    train_acc.append(move_acc)
 
-                # add to tensorboard
-                tb.add_scalar("train/loss_total", loss_total.item(), global_step=gs, walltime=time.time())
-                tb.add_scalar("train/loss_policy", loss_policy.item(), global_step=gs, walltime=time.time())
-                tb.add_scalar("train/loss_value", loss_value.item(), global_step=gs, walltime=time.time())
-                tb.add_scalar("train/move_acc", move_acc, global_step=gs, walltime=time.time())
+                # # add to tensorboard
+                # tb.add_scalar("train/loss_total", loss_total.item(), global_step=gs, walltime=time.time())
+                # tb.add_scalar("train/loss_policy", loss_policy.item(), global_step=gs, walltime=time.time())
+                # tb.add_scalar("train/loss_value", loss_value.item(), global_step=gs, walltime=time.time())
+                # tb.add_scalar("train/move_acc", move_acc, global_step=gs, walltime=time.time())
                 log_dict = {
-                    "loss_total": loss_total.item(),
-                    "loss_policy": loss_policy.item(),
-                    "loss_value": loss_value.item(),
+                    "loss_total": loss_total,
+                    "loss_policy": loss_policy,
+                    "loss_value": loss_value,
                     "move_acc": move_acc
                 }
                 
@@ -470,18 +509,23 @@ class Trainer:
                         with torch.no_grad():
                             # get model results
                             (policy, values, loss) = model(loss=True, **d)
-                            loss_total = loss[0].mean() # gather
-                            loss_policy = loss[1].mean() # gather
-                            loss_value = loss[2].mean() # gather
-                            test_losses.append([loss_total.item()])
+                            loss_total = loss[0].mean().item()  # gather
+                            if not isinstance(loss[1], int):
+                                loss_policy = loss[1].mean().item()  # gather
+                            else:
+                                loss_policy = -1
+                            loss_value = loss[2].mean().item()  # gather
+                            train_losses.append(loss_total)
 
                             # calculate move accuracy
-                            policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
-                            policy = torch.argmax(policy, dim=-1)
-                            targets = d["input_ids"][:, 1:].contiguous().view(-1)
-                            move_acc = sum(targets == policy).item()
-                            move_acc /= targets.size(0)
-                            test_acc.append(move_acc)
+                            move_acc = 0
+                            if policy is not None:
+                                policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
+                                policy = torch.argmax(policy, dim=-1)
+                                targets = d["input_ids"][:, 1:].contiguous().view(-1)
+                                move_acc = sum(targets == policy).item()
+                                move_acc /= targets.size(0)
+                                train_acc.append(move_acc)
 
                             if model_config.loss_method == "ce":
                                 values = F.softmax(values[:, :-1, :], dim=-1).contiguous().view(-1, 3)  # [B, N, 3]
@@ -490,10 +534,10 @@ class Trainer:
                                 test_losses[-1].append(mse.mean().item())
 
                             # add to tensorboard
-                            tb.add_scalar("test/loss_total", loss_total.item(), global_step=gs, walltime=time.time())
-                            tb.add_scalar("test/loss_policy", loss_policy.item(), global_step=gs, walltime=time.time())
-                            tb.add_scalar("test/loss_value", loss_value.item(), global_step=gs, walltime=time.time())
-                            tb.add_scalar("test/move_acc", move_acc, global_step=gs, walltime=time.time())
+                            # tb.add_scalar("test/loss_total", loss_total.item(), global_step=gs, walltime=time.time())
+                            # tb.add_scalar("test/loss_policy", loss_policy.item(), global_step=gs, walltime=time.time())
+                            # tb.add_scalar("test/loss_value", loss_value.item(), global_step=gs, walltime=time.time())
+                            # tb.add_scalar("test/move_acc", move_acc, global_step=gs, walltime=time.time())
 
                     # now testing is complete so see the results, save or stop if needed
                     test_losses = np.array(test_losses)
