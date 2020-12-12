@@ -37,7 +37,7 @@ args.add_argument("--num_epochs", type=int, default=1, help="Number of epochs to
 args.add_argument("--save_folder", type=str, default="models", help="Folder to save model to")
 args.add_argument("--name", type=str, default="cgpt", help="Saved name to have filepath `<name>.pt`")
 args.add_argument("--test_every", type=int, default=1000, help="Test after these global steps")
-args.add_argument("--patience", type=int, default=3, help="Early stopping partience value")
+args.add_argument("--patience", type=int, default=1, help="Early stopping partience value")
 args = args.parse_args()
 
 # path and file management
@@ -96,7 +96,8 @@ trainerConf = TrainerConfig(
     scheduler=args.scheduler,
     t0div = 5,
     tmult = 2,
-    warmup_perc = 0.14 # 14% of steps are used for warmup
+    warmup_perc = 0.14, # 14% of steps are used for warmup
+    jitter_scale = 20 # scale for LR noise
 )
 trainer = Trainer(model, dstrain, trainerConf, dstest)
 print(trainerConf)

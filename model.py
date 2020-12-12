@@ -420,6 +420,19 @@ class Trainer:
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
             print("Using WarmupConstant scheduler, warmup:", warmup, scheduler)
 
+        elif config.scheduler == "CosineDecayJitter":
+            warmup = int(config.warmup_perc * total_steps)
+            def lr_lambda(current_step):
+                if current_step < warmup:
+                    return float(current_step) / float(max(1, warmup))
+                progress = float(current_step - warmup) / float(max(1, total_steps - warmup))
+                lr = max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress))) # * 1000
+                # add jitter in lr
+                lr += np.random.uniform(low = -lr/config.jitter_scale, high = lr/config.jitter_scale)
+                return lr
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+            print("Using CosineDecay scheduler, warmup:", warmup, scheduler)
+
         else:
             scheduler = None
         print("Train Data Size:", len(train_data), "; Test Data Size:", len(test_data))
@@ -602,6 +615,10 @@ class TrainerConfig:
 
         elif self.scheduler in ["NoamDecay", "CosineDecay", "WarmupConstant"]:
             assert hasattr(self, "warmup_perc"), "Provide Warmup percentage"
+
+        elif self.scheduler in ["CosineDecayJitter"]:
+            assert hasattr(self, "warmup_perc"), "Provide Warmup percentage"
+            assert hasattr(self, "jitter_scale"), "Provide jitter scale"
 
     def __repr__(self):
         return "---- TRAINER CONFIGURATION ----\n" + \
