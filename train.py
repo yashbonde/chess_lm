@@ -14,7 +14,7 @@ args.add_argument("--res", type=str, default = "data/all_res.txt", help="path to
 args.add_argument("--m2id", type=str, default = "assets/moves.json", help="path to move_to_id json")
 
 # model things
-args.add_argument("--maxlen", type = int, default = 85, help = "maximum length")
+args.add_argument("--maxlen", type = int, default = 85 * 3, help = "maximum length")
 args.add_argument("--ds", type = str, default = "full", help = "to use in memory or iterable Dataset [full / iter]")
 args.add_argument("--buffer", type = int, default = 99999, help = "buffer size for DataSet")
 args.add_argument("--n_embd", type = int, default = 128, help = "embedding dim")
@@ -23,7 +23,7 @@ args.add_argument("--n_head", type = int, default = 8, help = "number of heads f
 args.add_argument("--model", type = str, default = "beta", help = "which model to train, select from `base`, `beta`")
 
 # optim settings
-args.add_argument("--lr", type = float, default = 4e-4, help = "learning rate")
+args.add_argument("--lr", type = float, default = 3e-5, help = "learning rate")
 args.add_argument("--beta1", type = int, default = 0.9, help = "Adam.beta1") # momentum for first gradient
 args.add_argument("--beta2", type = int, default = 0.999, help = "Adam.beta2") # momentum for second moment (var)
 
@@ -48,11 +48,11 @@ model_path = os.path.join(model_folder, args.name + ".pt")
 
 if args.lmtrain[-4:] == "hdf5":
     print("Using HDF5 data")
-    assert args.maxlen == 85, "using hdf5 means you have harcoded len = 85"
+    assert args.maxlen % 85 == 0, "using hdf5 means maxlen % 85 == 0"
     
 elif args.lmtrain[-3:] == "npz":
     print("Using numpy zips")
-    assert args.maxlen == 85, "using numpy means you have harcoded len = 85"
+    assert args.maxlen % 85 == 0, "using numpy means maxlen % 85 == 0"
 
 dataConfig = DataConfig(
     lm=args.lmtrain,

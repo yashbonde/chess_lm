@@ -516,6 +516,7 @@ class Trainer:
 
                     test_losses = []
                     test_acc = []
+                    test_loss_value = []
                     pbar_test = trange(num_batches, ncols = 100)
                     for it, d in zip(pbar_test, dl_test):
                         d = {k:v.to(self.device) for k,v in d.items()}
@@ -531,6 +532,7 @@ class Trainer:
                                 loss_policy = -1
                             loss_value = loss[2].mean().item()  # gather
                             test_losses.append([loss_total])
+                            test_loss_value.append([loss_value])
 
                             # calculate move accuracy
                             move_acc = 0
@@ -565,6 +567,8 @@ class Trainer:
                     })
                     if model_config.loss_method == "ce":
                         log_dict.update({"test_regression_loss": np.mean(test_losses[:, 1])})
+                    else:
+                        log_dict.update({"test_value_loss": np.mean(test_loss_value)})
 
                     if prev_train_loss > losses:
                         prev_train_loss = losses
@@ -670,6 +674,10 @@ def get_datasets(config, split):
         clm = np.load("data/clm.npz")
         lms = clm["lms"]
         results = clm["res"]
+        
+        lms = lms.reshape(-1, config.maxlen)
+        results = results.reshape(-1, config.maxlen)
+        
         print(f"Numpy Loading took: {time.time()-st}s")
 
     else:
