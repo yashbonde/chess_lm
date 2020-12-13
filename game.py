@@ -188,12 +188,13 @@ def top_p(x, p = 0.98):
 ####### Tree Helpers ###########################
 ################################################
 class Node():
-    def __init__(self, state_value, move, p, b, color, rc):
+    def __init__(self, state_value, move, p, b, color, rc, is_root = False):
         self.state_value = state_value # the value is now state action value
         self.move = move
         self.p = p # prior - probability of taking this move
         self.color = color # color of player taking this move
         self.rc = rc # root_node.color
+        self.is_root = is_root # root node flag used for action selection
         
         self.n = 0 # number of times this is visited, initialised with 0
         self.children = [] # all the children
@@ -416,9 +417,13 @@ def expand_tree(model, root_node, b, depth, vocab, inv_vocab, nodes_taken):
     # SELECTION
     # step 3: select the best move
     action_values = np.asarray([x.get_action_value_with_exploration() for x in root_node.children]) # a = q + u
-    dirchlet_noise =  np.random.dirichlet(np.ones_like(action_values) * 0.3) # Dir(a)
-    action_value = 0.75 * action_values + 0.25 * dirchlet_noise
-    child_node = root_node.children[np.argsort(action_value)[-1]] # chose the action with highest state action value
+    if root_node.is_root:
+        # From Paper: Dirichlet noise Dir(α) was added to the prior probabilities in the root node;
+        # this was scaled in inverse proportion to the approximate number of legal moves in a typical position
+        dirchlet_noise =  np.random.dirichlet(np.ones_like(action_values) * 0.3) # Dir(a)
+        # dirchlet_noise = dirchlet_noise ** (1/len(legal_moves))
+        action_values = 0.75 * action_values + 0.25 * dirchlet_noise
+    child_node = root_node.children[np.argsort(action_values)[-1]] # chose the action with highest state action value
     nodes_taken.append(child_node)
     # now we have the best move so push this to the board
     bfuture = b.copy()
@@ -457,8 +462,9 @@ def backup(nodes_taken, discount_factor = 1):
         n.action_value = (n.n*n.action_value + bootstrap) / (n.n + 1)
         n.n = n.n + 1
         
-def mcts(model, root_node, b, depth, vocab, inv_vocab, sims = 10):
-    for i in trange(sims):
+def mcts(model, root_node, b, depth, vocab, inv_vocab, sims = 10, _trange = True):
+    pbar = trange(sims) if _trange else range(sims)
+    for i in pbar:
         nodes_taken = []
         expand_tree(model, root_node, b, depth, vocab, inv_vocab, nodes_taken)
         backup(nodes_taken)
@@ -476,6 +482,117 @@ def select_action(n, t=1):
     counts = np.array([x.n for x in n.children])
     policy = (counts ** (1/t)) / sum(counts ** (1/t))
     return policy
+
+
+################################################
+####### Self-Play ##############################
+################################################
+
+
+def self_play_one_game(m1, m2, vocab, inv_vocab, replay_buffer = None, max_moves = 10, depth = 10, sims = 10):
+    # assume m1 = white and m2 = black
+    # print_mcts, select_action
+    
+    # we are going to start the game from scratch
+    game = GameEngine()
+    this_game_buffer = []
+    for mid in range(max_moves):
+        col = "white" if mid % 2 == 0 else "black" # get the player color
+        model = m1 if col == "white" else m2 # get the player model
+        b = game.board
+        print(b.fen())
+
+        # now board is player till n_moves, root_node (k=0, s^0) = s_{n_moves}
+        legal_moves = [vocab[str(x)[:4]] for x in b.legal_moves]
+        moves = get_mv_ids(b, vocab)    
+        with torch.no_grad():
+            logits, values = model(input_ids = Tensor(moves).view(1, len(moves)).long())
+            values = values[0, -1].item()
+            logits = softmax(logits[0, -1, legal_moves].numpy())
+        # root_node = Node(state_value = values, move = "[GAME]", p = 0., b = b, color = "white", rc = "white")
+        move_str = str(b.move_stack[-1]) if b.move_stack else "[GAME]"
+        root_node = Node(
+            state_value = values,
+            move = move_str,
+            p = 0.,
+            b = b,
+            color = "white",
+            rc = "white",
+            is_root = True
+        )
+        
+        this_game_buffer.append((vocab[move_str], values))
+
+        # perform mcts and get the policy distribution
+        mcts(model, root_node, b, depth, vocab, inv_vocab, sims = sims, _trange = False)
+        policy = select_action(root_node, t = 1) # larger temp, more variance
+        action = Player.better_choice(legal_moves, policy, n = 1)[0]
+        move = Move(inv_vocab[action])
+        print(policy, action, "--->", move)
+        done, res = game.step(move)
+        if done:
+            print(f"Game is over at step {mid + 1} and player color {col} --> {res}")
+            break
+            
+    if replay_buffer is not None:
+        replay_buffer.extend(this_game_buffer)
+    else:
+        return col, res
+
+def learn_by_self_play(model, model_ckpt_path, num_games, train_every, buffer_size, tournament_size, vocab, inv_vocab, trainer_config):
+    """
+    this method takes in a model, makes a dataset from competing with each other over a certain
+    number of steps and then trains once the buffer is full and performs a tournament between the
+    players to idenitify the best model.
+    
+    Returns:
+        best_model_path: path to check point the best model
+    """
+    buffer = []
+    trainer = SelfPlayTrainer(trainer_config)
+    best_model_path = None
+    for i in range(num_games):
+        self_play_one_game(model, model, vocab, inv_vocab, buffer, max_moves = 10, depth = 3, sims = 2)
+        
+        # free up memory
+        if len(buffer) > buffer_size:
+            # keep the latest samples for training
+            del buffer[:len(buffer) - buffer_size]
+        
+        if i and i % train_every == 0:
+            # section where we train the model --> convert the buffer into a torch.data.Dataset for feeding
+            # into the SelfPlayTrainer object directly
+            
+            model.train()
+            trainer.train(buffer) # train on this buffer
+            latest_ckpt_path = trainer.save_checkpoint() # save after training 
+            model.eval()
+    
+            # now the training is complete so perform a tournament and update the best model
+            best_model_path = model_ckpt_path if best_model_path == None else best_model_path
+            best_model = BaseHFGPT(model.config)
+            best_model = best_model.load_state_dict(torch.load(best_model_path, map_location = "cpu"))
+            new_model_win = 0
+            for t in range(tournament_size):
+                # for ~50% of cases play as white and other times play as black
+                if t%2 == 0:
+                    m1 = model
+                    m2 = best_model
+                    win_col = "white"
+                else:
+                    m1 = best_model
+                    m2 = model
+                    win_col = "black"
+                col, res = self_play_one_game(m1, m2, vocab, inv_vocab, None, max_moves = 10, depth = 3, sims = 2)
+                if res == "win" and col == win_col:
+                    # new model won
+                    new_model_win += 1
+                
+            # if the new player wins 55% of the games then update the path
+            if new_model_win / tournament_size > 0.55:
+                best_model_path = latest_ckpt_path
+                
+    return best_model_path
 
 
 ################################################
@@ -523,7 +640,8 @@ class Player():
     def flush():
         pass
 
-    def better_choice(self, a, p, n):
+    @staticmethod
+    def better_choice(a, p, n):
         # make better choices man!
 
         # the default np.random.choice has problems when sum(p) != 1

@@ -34,17 +34,17 @@ def set_seed(seed):
 ################################################
 
 class BaseHFGPT(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, policy_bias = False):
         super().__init__()
         self.config = config
         self.gpt = GPT2Model(config)
-        self.policy_head = nn.Linear(config.n_embd, config.vocab_size)
+        self.policy_head = nn.Linear(config.n_embd, config.vocab_size, bias = policy_bias)
 
         # final head
         if config.loss_method == "mse":
-            self.val_head = nn.Linear(config.n_embd, 1)
+            self.value_head = nn.Linear(config.n_embd, 1)
         elif config.loss_method == "ce":
-            self.val_head = nn.Linear(config.n_embd, 3)
+            self.value_head = nn.Linear(config.n_embd, 3)
 
     def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
         config = self.config
@@ -441,7 +441,7 @@ class Trainer:
             # this is second method for creating a training loop
             pbar_train = trange(total_steps, ncols=100)
             dl_train = DataLoader(dataset=train_data, pin_memory=True, batch_size=config.batch_size, shuffle=train_data.shuffle)
-            prev_train_loss = 100000 # what was the training loss in previos testing cycle
+            prev_train_loss = 100000 # what was the training loss in previous testing cycle
             no_loss_steps = 0 # no of steps since there was devrease in the loss
             break_training = False
             train_losses = [-1]

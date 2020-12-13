@@ -14,6 +14,8 @@ python3 play.py # goto http://0.0.0.0:5000/ in browser and play
 
 To see a random gameplay between two AI agents ("AI goes brrrr....") run `python3 game.py` which will print value, confidence for each move and create a PGN file. To see the gameplay online goto this [website](https://chesstempo.com/pgn-viewer/), copy paste your PGN.
 
+**In order to train a network that does not collapse and is able to reduce the MSE valaue error the longer sequence lengths actually help!**
+
 
 ## It Learns!...?
 
@@ -161,14 +163,11 @@ I need to come up with good metrics!
 
 ## Updates
 
-- **30/11/2020** As I had new learnings, there were something that needed deprecation and improvements:
-  - No longer supporting IterativeDatasets, full work much better
-  - Bring back train/holdout sets to be generated from same function
-  - Improve logging in tensorboard, now logs move accuracy, train and evaluation have same logs for consistency
-  - Testing now happens as the training progresses and not after an epoch (re wrote `Trainer.train()` method for this)
-  - `total_steps` is now the default iteration method and not `max_epochs`, determined using `total_step = num_batch * max_epochs` and add early stopping. This brings is closer to the literature where training is done over a fixed set of steps and valuation also happens on steps and not epochs.
+- **13/12/2020** Some more updates:
+  - After training 99 networks I havae realised that longer sequences train better networks.
+  - self-play code started, can fill a buffer
 
-- **04/12/2020** Some more updates:
+- **05/12/2020** Some more updates:
   - New, better, larger dataset form FICS website
   - Updated `download.py` to now use multiprocessing for faster dataset preparation
   - Move to 2x2080Ti machine and start with new models
@@ -177,6 +176,14 @@ I need to come up with good metrics!
   - Implement weight decay
   - Move Training logs to W&B (god bless this!)
   - Reformulate my network to current RL standard, not my standard. Also change code according to it.
+
+- **30/11/2020** As I had new learnings, there were something that needed deprecation and improvements:
+  - No longer supporting IterativeDatasets, full work much better
+  - Bring back train/holdout sets to be generated from same function
+  - Improve logging in tensorboard, now logs move accuracy, train and evaluation have same logs for consistency
+  - Testing now happens as the training progresses and not after an epoch (re wrote `Trainer.train()` method for this)
+  - `total_steps` is now the default iteration method and not `max_epochs`, determined using `total_step = num_batch * max_epochs` and add early stopping. This brings is closer to the literature where training is done over a fixed set of steps and valuation also happens on steps and not epochs.
+
 
 ## Credits
 
