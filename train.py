@@ -14,7 +14,7 @@ args.add_argument("--res", type=str, default = "data/all_res.txt", help="path to
 args.add_argument("--m2id", type=str, default = "assets/moves.json", help="path to move_to_id json")
 
 # model things
-args.add_argument("--maxlen", type = int, default = 85 * 3, help = "maximum length")
+args.add_argument("--maxlen", type = int, default = 85 * 2, help = "maximum length")
 args.add_argument("--ds", type = str, default = "full", help = "to use in memory or iterable Dataset [full / iter]")
 args.add_argument("--buffer", type = int, default = 99999, help = "buffer size for DataSet")
 args.add_argument("--n_embd", type = int, default = 128, help = "embedding dim")

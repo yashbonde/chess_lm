@@ -134,3 +134,4 @@ cool_samples/
 
 data/
 wandb/
+.vscode/
