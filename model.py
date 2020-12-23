@@ -438,7 +438,7 @@ class Trainer:
 
         else:
             scheduler = None
-        print("Train Data Size:", len(train_data), "; Test Data Size:", len(test_data))
+        print("Train Data Size:", len(train_data), "; Test Data Size:", len(test_data), "; Scheduler:", scheduler)
 
         with SummaryWriter(log_dir=config.tb_path, flush_secs=20) as tb:
             # this is second method for creating a training loop
@@ -624,11 +624,15 @@ class TrainerConfig:
     test_every = None
     scheduler = None
     weight_decay = 0.1
+    warmup_perc = None
+    warmup_tokens = None
+    final_tokens = None
 
     def __init__(self, **kwargs):
         self.attrs = [
             "num_epochs", "batch_size", "lr", "betas", "grad_norm_clip", "num_workers",
-            "ckpt_path", "tb_path", "patience", "test_every", "scheduler", "weight_decay"
+            "ckpt_path", "tb_path", "patience", "test_every", "scheduler", "weight_decay",
+            "warmup_perc", "final_tokens", "warmup_tokens"
         ]
         for k,v in kwargs.items():
             setattr(self, k, v)
@@ -644,10 +648,16 @@ class TrainerConfig:
         elif self.scheduler in ["CosineDecayJitter"]:
             assert hasattr(self, "warmup_perc"), "Provide Warmup percentage"
             assert hasattr(self, "jitter_scale"), "Provide jitter scale"
+
+        if self.warmup_tokens == None:
+            # total tokens // (batch_size * 170)
+            self.final_tokens = 607129500
+            self.warmup_tokens = int(self.final_tokens * self.warmup_perc)
+            print("Auto Setting warmup_tokens using", self.warmup_perc, "to", self.warmup_tokens)
             
         elif self.scheduler == "GPT3":
-            assert hasattr(self, "final_tokens")
-            assert hasattr(self, "warmup_tokens")
+            assert self.final_tokens != None
+            assert self.warmup_tokens != None
 
     def __repr__(self):
         return "---- TRAINER CONFIGURATION ----\n" + \

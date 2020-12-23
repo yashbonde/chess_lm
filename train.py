@@ -18,12 +18,12 @@ args.add_argument("--maxlen", type = int, default = 85 * 2, help = "maximum leng
 args.add_argument("--ds", type = str, default = "full", help = "to use in memory or iterable Dataset [full / iter]")
 args.add_argument("--buffer", type = int, default = 99999, help = "buffer size for DataSet")
 args.add_argument("--n_embd", type = int, default = 200, help = "embedding dim")
-args.add_argument("--n_layer", type = int, default = 8, help = "number of layers of the model")
+args.add_argument("--n_layer", type = int, default = 10, help = "number of layers of the model")
 args.add_argument("--n_head", type = int, default = 10, help = "number of heads for MHA")
 args.add_argument("--model", type = str, default = "beta", help = "which model to train, select from `base`, `beta`")
 
 # optim settings
-args.add_argument("--lr", type = float, default = 3e-5, help = "learning rate")
+args.add_argument("--lr", type = float, default = 1e-4, help = "learning rate")
 args.add_argument("--beta1", type = int, default = 0.9, help = "Adam.beta1") # momentum for first gradient
 args.add_argument("--beta2", type = int, default = 0.95, help = "Adam.beta2") # momentum for second moment (var)
 
@@ -31,9 +31,11 @@ args.add_argument("--beta2", type = int, default = 0.95, help = "Adam.beta2") # 
 args.add_argument("--scheduler", type=str, default = "GPT3", help= "LR scheduler one of `CosineAnnealingWarmRestarts,"
     "OneCycleLR, MultiStepLR, NoamDecay, CosineDecay, WarmupConstant, GPT3`"
 )
-args.add_argument("--batch_size", type=int, default=200, help="batch size")
+args.add_argument("--batch_size", type=int, default=150, help="batch size")
 args.add_argument("--split", type=float, default=0.01, help="ratio of data to use as testing")
 args.add_argument("--num_epochs", type=int, default=1, help="Number of epochs to train / finetune")
+args.add_argument("--warmup_perc", type=float, default=0.2, help="weight decay value for L2 reg.")
+args.add_argument("--weight_decay", type=float, default=0.1, help="weight decay value for L2 reg.")
 args.add_argument("--save_folder", type=str, default="models", help="Folder to save model to")
 args.add_argument("--name", type=str, default="cgpt", help="Saved name to have filepath `<name>.pt`")
 args.add_argument("--test_every", type=int, default=1000, help="Test after these global steps")
@@ -98,13 +100,18 @@ trainerConf = TrainerConfig(
     scheduler=args.scheduler,
     t0div = 5,
     tmult = 2,
-    warmup_perc = 0.14, # 14% of steps are used for warmup
+    weight_decay = args.weight_decay,
+    
+    warmup_perc = args.warmup_perc, # 14% of steps are used for warmup
     jitter_scale = 20, # scale for LR noise
     
     # get 19305 batches with batch size = 185 with 170 tokens
     # final_tokens = total_batches * batch_size * toks in each batch size
-    final_tokens = 19305 * 200 * 170, # value at which the lr goes to 10% of original
-    warmup_tokens = 19305 * 20 * 170, # 10 % of the steps are warmup steps
+#     final_tokens = 19305 * 185 * 170, # value at which the lr goes to 10% of original
+#     warmup_tokens = 19305 * 185 * 170, # 10 % of the steps are warmup steps
+    
+    # n_layer = 10 and bactch_size = 150 gives 23809 steps
+#     final_tokens = 23809 * 150 * 170,
 )
 trainer = Trainer(model, dstrain, trainerConf, dstest)
 print(trainerConf)
