@@ -432,6 +432,9 @@ class Trainer:
                 return lr
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
             print("Using CosineDecay scheduler, warmup:", warmup, scheduler)
+        
+        elif config.scheduler == "GPT3":
+            scheduler = "GPT3"
 
         else:
             scheduler = None
@@ -443,6 +446,7 @@ class Trainer:
             dl_train = DataLoader(dataset=train_data, pin_memory=True, batch_size=config.batch_size, shuffle=train_data.shuffle)
             prev_train_loss = 100000 # what was the training loss in previous testing cycle
             no_loss_steps = 0 # no of steps since there was devrease in the loss
+            processed_tokens = 0 # number of tokens processed till now
             break_training = False
             train_losses = [-1]
             train_acc = [-1]
@@ -493,7 +497,7 @@ class Trainer:
                     log_dict.update({"regression_loss": mse.mean().item()})
 
 
-                if scheduler is not None:
+                if scheduler is not None and scheduler != "GPT3":
                     last_lr = scheduler.get_last_lr()[0]
                     tb.add_scalar("train/lr", last_lr, global_step=gs, walltime=time.time())
                     log_dict.update({"lr": last_lr})
@@ -502,8 +506,25 @@ class Trainer:
                 loss_total.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
                 optimizer.step()
-                if scheduler is not None:
+                if scheduler is not None and scheduler != "GPT3":
                     scheduler.step()
+                    
+                # ------------- LR SCHEDULING
+                elif scheduler == "GPT3":
+                    # update learning rate
+                    processed_tokens += d["input_ids"].size(0) * model_config.n_ctx # batch_size * number of tokens in each sequence
+                    if processed_tokens < config.warmup_tokens:
+                        # linear warmup
+                        lr_mult = float(processed_tokens) / float(max(1, config.warmup_tokens))
+                    else:
+                        # cosine learning rate decay
+                        progress = float(processed_tokens - config.warmup_tokens) / float(max(1, config.final_tokens - config.warmup_tokens))
+                        lr_mult = max(0.1, 0.5 * (1.0 + math.cos(math.pi * progress)))
+                    lr = config.lr * lr_mult
+                    for param_group in optimizer.param_groups:
+                        param_group['lr'] = lr
+                    log_dict.update({"lr": lr})
+                # ------------- LR SCHEDULING
 
                 # test if time has come
                 if gs > 0 and gs % config.test_every == 0:
@@ -623,6 +644,10 @@ class TrainerConfig:
         elif self.scheduler in ["CosineDecayJitter"]:
             assert hasattr(self, "warmup_perc"), "Provide Warmup percentage"
             assert hasattr(self, "jitter_scale"), "Provide jitter scale"
+            
+        elif self.scheduler == "GPT3":
+            assert hasattr(self, "final_tokens")
+            assert hasattr(self, "warmup_tokens")
 
     def __repr__(self):
         return "---- TRAINER CONFIGURATION ----\n" + \
