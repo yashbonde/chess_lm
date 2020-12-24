@@ -651,7 +651,7 @@ class TrainerConfig:
 
         if self.warmup_tokens == None:
             # total tokens // (batch_size * 170)
-            self.final_tokens = 607129500
+            self.final_tokens = 613256130 # total size of all the tokens
             self.warmup_tokens = int(self.final_tokens * self.warmup_perc)
             print("Auto Setting warmup_tokens using", self.warmup_perc, "to", self.warmup_tokens)
             
