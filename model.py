@@ -389,9 +389,16 @@ class Trainer:
             )
 
         elif config.scheduler == "MultiStepLR":
+            # 102038 at bsize = 35 and maxlen = 170
+            # 0      - 0.2     (do not write this in milestones)
+            # 1000   - 0.02
+            # 10000  - 0.002
+            # 50000  - 0.0002
+            # 100000 - 0.00002
             scheduler = torch.optim.lr_scheduler.MultiStepLR(
                 optimizer=optimizer,
-                milestones=[100, 1000, 5000, 10000],
+                milestones=[1000, 10000, 50000, 100000],
+                gamma = 0.1
             )
 
         elif config.scheduler == "NoamDecay":
@@ -611,6 +618,10 @@ class Trainer:
                     print("Stopping training")
                     break
 
+            model.train()
+            print("Final Step Save")
+            cp = config.ckpt_path.replace(".pt", f"_{gs}.pt")
+            self.save_checkpoint(cp)
 class TrainerConfig:
     num_epochs = 2
     batch_size = 64

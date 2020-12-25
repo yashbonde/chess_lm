@@ -16,6 +16,11 @@ from torch import Tensor
 from model import BaseHFGPT, ModelConfig, BetaChess
 
 
+def verbose_print(*args, verbose), verbose = verbose:
+    if verbose:
+        print(*args)
+
+
 def Move(x):
     # get chess.Move object and force promote to queen
     if not x[-1].isdigit():
@@ -27,43 +32,43 @@ def get_mv_ids(b, vocab):
     return [vocab["[GAME]"]] + [vocab[str(x)[:4]] for x in b.move_stack]
 
 
-def check_board_state(b):
+def check_board_state(b, verbose = False):
     done = False
     res = "game"
     # draw results
     if b.is_stalemate():  # stalemate
-        print("Stalemate")
+        verbose_print("Stalemate", verbose = verbose)
         done = True
         res = "draw"
 
     elif b.can_claim_threefold_repetition():
-        print("Threefold repetition claimed")
+        verbose_print("Threefold repetition claimed", verbose = verbose)
         done = True
         res = "draw"
 
     elif b.can_claim_fifty_moves():
-        print("Fifty Moves claimed")
+        verbose_print("Fifty Moves claimed", verbose = verbose)
         done = True
         res = "draw"
 
     elif b.is_fivefold_repetition():
-        print("Fivefold repetition")
+        verbose_print("Fivefold repetition", verbose = verbose)
         done = True
         res = "draw"
 
     elif b.is_seventyfive_moves():
-        print("SeventyFive Moves")
+        verbose_print("SeventyFive Moves", verbose = verbose)
         done = True
         res = "draw"
 
     elif b.is_insufficient_material():
-        print("Insufficient Material")
+        verbose_print("Insufficient Material", verbose = verbose)
         done = True
         res = "draw"
 
     # win result
     elif b.is_checkmate():
-        print("Checkmate")
+        verbose_print("Checkmate", verbose = verbose)
         done = True
         res = "win"
     return done, res
@@ -92,7 +97,7 @@ class GameEngine():
     def reset(self):
         self.board.reset()
 
-    def step(self, move):
+    def step(self, move, verbose = False):
         """
         Game is considered draw in the following cases:
         - Stalemate: no legal move but no check
@@ -116,44 +121,8 @@ class GameEngine():
         board = self.board
         board.push(move)
         res = "game"
-
-        # draw results
-        if board.is_stalemate():  # stalemate
-            print("Stalemate")
-            self.done = True
-            res = "draw"
-
-        elif board.can_claim_threefold_repetition():
-            print("Threefold repetition claimed")
-            self.done = True
-            res = "draw"
-
-        elif board.can_claim_fifty_moves():
-            print("Fifty Moves claimed")
-            self.done = True
-            res = "draw"
-
-        elif board.is_fivefold_repetition():
-            print("Fivefold repetition")
-            self.done = True
-            res = "draw"
-
-        elif board.is_seventyfive_moves():
-            print("SeventyFive Moves")
-            self.done = True
-            res = "draw"
-
-        elif board.is_insufficient_material():
-            print("Insufficient Material")
-            self.done = True
-            res = "draw"
-
-        # win result
-        elif board.is_checkmate():
-            print("Checkmate")
-            self.done = True
-            res = "win"
-
+        done, res = check_board_state(self.board, verbose = verbose)
+        self.done = done
         return self.done, res
 
 
@@ -253,13 +222,12 @@ class Node():
 
 
 def one_future(mv, mvp, lgt_mv, v_mv, vocab, inv_vocab, b, p = 0.98, verbose = False):
-    if verbose:
-        print("Applied", inv_vocab[mv], "on board", b.fen(), end = " ")
+    verbose_print("Applied", inv_vocab[mv], "on board", b.fen(), end=" ", verbose = verbose)
     # push board to one future and determine what are the legal moves
     bfuture = b.copy()
     bfuture.push(Move(inv_vocab[mv]))
     if verbose:
-        print("--> to get board", bfuture.fen())
+        verbose_print("--> to get board", bfuture.fen(), verbose = verbose)
     future_legal = [vocab[str(x)[:4]] for x in bfuture.legal_moves] # valid futures
 
     # now get probability distribution for for these legal moves and determine the top ones
@@ -267,8 +235,7 @@ def one_future(mv, mvp, lgt_mv, v_mv, vocab, inv_vocab, b, p = 0.98, verbose = F
     lgt_mv_idx = top_p(lgt_mv.reshape(1, len(lgt_mv)), p=p)  # [1, N]
     future_legal = [future_legal[i] for i in lgt_mv_idx[0]]
     lgt_mv_probs = [lgt_mv[i] for i in lgt_mv_idx[0]]
-    if verbose:
-        print("Using Futures", [inv_vocab[x] for x in future_legal], future_legal)
+    verbose_print("Using Futures", [inv_vocab[x] for x in future_legal], future_legal, verbose = verbose)
     return future_legal, lgt_mv_probs, Node(value=v_mv[0], move=inv_vocab[mv], p=mvp, b=bfuture)
 
 
@@ -283,8 +250,7 @@ def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, mv_probs = None, v
         mv_ids = [vocab[str(x)[:4]] for x in b.legal_moves] # valid moves
         mv_probs = np.ones(len(mv_ids), dtype=np.float) / len(mv_ids)
     
-    if verbose:
-        print("Given Root:", root.s, "played on board:", b.fen(), [inv_vocab[x] for x in mv_ids])
+    verbose_print("Given Root:", root.s, "played on board:", b.fen(), [inv_vocab[x] for x in mv_ids], verbose = verbose)
 
     mv_batched = np.asarray([[0] + [vocab[str(x)[:4]] for x in b.move_stack] + [l] for l in mv_ids])[:, :model.config.n_ctx]
     with torch.no_grad():
@@ -295,8 +261,7 @@ def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, mv_probs = None, v
     # now get the possible future possibilities for each move taken
     all_possible_future_moves = []
     all_possible_future_moves_probs = []
-    if verbose:
-        print("\nEntering Future possibilites determiner...")
+    verbose_print("\nEntering Future possibilites determiner...", verbose = verbose)
     
     for mv, mvp, lgt_mv, v_mv in zip(mv_ids, mv_probs, logits, values):
         # make one step in the future and return the best value
@@ -304,14 +269,12 @@ def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, mv_probs = None, v
         all_possible_future_moves.append(future_legal)
         all_possible_future_moves_probs.append(lgt_mv_probs)
         root.children.append(node)
-    if verbose:
-        print("Completed adding one step future to", root.s, [len(x) for x in all_possible_future_moves], "\n\n")
+    verbose_print("Completed adding one step future to", root.s, [len(x) for x in all_possible_future_moves], "\n\n", verbose = verbose)
     return all_possible_future_moves, all_possible_future_moves_probs
 
 
 def generate_tree(model, depth, board, root_node, vocab, inv_vocab, mv_ids = None, mv_probs = None, verbose = False):
-    if verbose:
-        print(f"({depth})", root_node.s, "played on", board.fen(), [str(x) for x in board.move_stack[-7:]], "-- FM --", mv_ids)
+    verbose_print(f"({depth})", root_node.s, "played on", board.fen(), [str(x) for x in board.move_stack[-7:]], "-- FM --", mv_ids, verbose = verbose)
 
     # for each child what is the policy and add children to root_node
     all_possible_future_moves, all_possible_future_moves_probs = one_step(model=model, b=board, root=root_node, mv_ids=mv_ids,
@@ -319,8 +282,7 @@ def generate_tree(model, depth, board, root_node, vocab, inv_vocab, mv_ids = Non
     )
     
     if depth > 1:
-        if verbose: 
-            print("Iterating over Children of", root_node.s)
+        verbose_print("Iterating over Children of", root_node.s, verbose = verbose)
         for mv_ids, mv_probs, child in zip(all_possible_future_moves, all_possible_future_moves_probs, root_node.children):
             # take this child, and make the move on this board
             bchild = board.copy()
@@ -358,17 +320,17 @@ def update_node_bonus(root_node):
 
 
 def minimax(node, depth, _max=False):
-    # print(node.s, _max, depth)
+    # verbose_print(node.s, _max, depth, verbose = verbose)
     if not depth or node.terminal:
         return node.state_value
 
     if _max:
-        # print()
+        # verbose_print(, verbose = verbose)
         val = -10000  # −∞
         for child in node.children:
             val = max(val, minimax(child, depth - 1, False))
     else:
-        # print()
+        # verbose_print(, verbose = verbose)
         val = +10000  # −∞
         for child in node.children:
             val = min(val, minimax(child, depth - 1, True))
@@ -489,18 +451,34 @@ def select_action(n, t=1):
 ################################################
 
 
-def self_play_one_game(m1, m2, vocab, inv_vocab, replay_buffer = None, max_moves = 10, depth = 10, sims = 10):
-    # assume m1 = white and m2 = black
+def self_play_one_game(
+        m1, m2, vocab, inv_vocab, replay_buffer = None,
+        max_moves = 10, depth = 10, sims = 10,
+        verbose = False
+    ):
+    """
+    plays one game between two players m1 and m2, assumes m1 = white and m2 = black
+    m1: Player object
+    m2: Player object
+    vocab: vocab
+    inv_vocab: inv_vocab
+    replay_buffer: list in which this games data will be extended
+    max_moves: maximum numebr of moves to take in the game
+    depth: depth of the search tree
+    sims: number of simulations to do for MCTS
+    """
     # print_mcts, select_action
     
     # we are going to start the game from scratch
     game = GameEngine()
+    col = None
+    res = None
     this_game_buffer = []
     for mid in range(max_moves):
         col = "white" if mid % 2 == 0 else "black" # get the player color
         model = m1 if col == "white" else m2 # get the player model
         b = game.board
-        print(b.fen())
+        verbose_print(b.fen(), verbose = verbose)
 
         # now board is player till n_moves, root_node (k=0, s^0) = s_{n_moves}
         legal_moves = [vocab[str(x)[:4]] for x in b.legal_moves]
@@ -528,16 +506,17 @@ def self_play_one_game(m1, m2, vocab, inv_vocab, replay_buffer = None, max_moves
         policy = select_action(root_node, t = 1) # larger temp, more variance
         action = Player.better_choice(legal_moves, policy, n = 1)[0]
         move = Move(inv_vocab[action])
-        print(policy, action, "--->", move)
+        verbose_print(policy, action, "--->", move, verbose = verbose)
         done, res = game.step(move)
         if done:
-            print(f"Game is over at step {mid + 1} and player color {col} --> {res}")
+            verbose_print(f"Game is over at step {mid + 1} and player color {col} --> {res}", verbose = verbose)
             break
             
     if replay_buffer is not None:
         replay_buffer.extend(this_game_buffer)
+        return col, res, replay_buffer
     else:
-        return col, res
+        return col, res, this_game_buffer
 
 def learn_by_self_play(model, model_ckpt_path, num_games, train_every, buffer_size, tournament_size, vocab, inv_vocab, trainer_config):
     """
@@ -672,7 +651,7 @@ class Player():
 
         return a[found]
 
-    def move(self, game):
+    def move(self, game, verbose = False):
         # nn predicts the move, value scalar and it's confidence for taking htat move (conf)
         config = self.model.config
         model = self.model
@@ -708,7 +687,7 @@ class Player():
             root_node = Node(state_value = value, move = mv, p = 0., b = b)
             # generate tree for this node
             _st = time()
-            # print("\nStarting tree generation ...", end = " ")
+            # verbose_print("\nStarting tree generation ...", end = " ", verbose = verbose)
             generate_tree(
                 model=model,
                 depth=self.depth,
@@ -719,7 +698,7 @@ class Player():
                 verbose = False,
             )
             root_node.update_q()
-            # print(f"Completed in {time() - _st:.4f}s. {root_node.total_nodes - 1} nodes evaluated")
+            # verbose_print(f"Completed in {time() - _st:.4f}s. {root_node.total_nodes - 1} nodes evaluated", verbose = verbose)
             # root_node = update_node_bonus(root_node)
 
             # now take the greedy move that maximises the value
@@ -816,7 +795,7 @@ if __name__ == "__main__":
     ) # assume to be black
 
     for round in trange(1):
-        print(f"Starting round: {round}")
+        verbose_print(f"Starting round: {round}", verbose = True)
         game = GameEngine()
         pgn_writer = chess.pgn.Game()
         pgn_writer_node = pgn_writer
@@ -839,17 +818,17 @@ if __name__ == "__main__":
                 else:
                     m, v, c = player2.move(game)
                     p = 0
-                print(mv, "|", m, v, c)
+                verbose_print(mv, "|", m, v, c, verbose = True)
 
                 if m != "resign":
                     done, res = game.step(m)
                     pgn_writer_node = pgn_writer_node.add_variation(m)
                     if res != "game" or mv == 25:
-                        print("Game over")
+                        verbose_print("Game over", verbose = True)
                         break
                 else:
-                    print("Player has resigned")
+                    verbose_print("Player has resigned", verbose = True)
         except KeyboardInterrupt:
             break
-        print("Saving...")
-        print(pgn_writer, file=open("auto_tournaments_search_d1.pgn", "a"), end="\n\n")
+        verbose_print("Saving...", verbose = True)
+        verbose_print(pgn_writer, file=open("auto_tournaments_search_d1.pgn", "a"), end="\n\n", verbose = True)

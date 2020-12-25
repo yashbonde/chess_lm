@@ -82,6 +82,7 @@ modelConfig = ModelConfig(
     resid_pdrop=drop_val,
     embd_pdrop=drop_val,
     attn_pdrop=drop_val,
+    initializer_range = 0.02
 )
 print(modelConfig)
 if args.model == "beta":

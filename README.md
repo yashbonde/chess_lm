@@ -16,6 +16,9 @@ To see a random gameplay between two AI agents ("AI goes brrrr....") run `python
 
 **In order to train a network that does not collapse and is able to reduce the MSE valaue error the longer sequence lengths actually help!**
 
+**Bonus:** Supervised results are 100% reproducible ensure that you use the same values as logged. If you consider loss as the AlphaZero where it was scaled by 1/4 to keep in [0,1] I do get the same values, the only task is to improve the policy:
+
+<img src="assets/loss_is_correct.png">
 
 ## It Learns!...?
 
@@ -173,9 +176,11 @@ I need to come up with good metrics!
 ## Updates
 
 - **25/12/2020** Some more updates:
-  - Trained a model zoo using Weights & Biases Sweep functionality. Models now regularly hit as low as 0.73 on value loss.
+  - Trained a massive 100-model zoo using Weights & Biases Sweep functionality. Models now regularly hit as low as 0.73 on value loss.
   - minimum `total_loss` is 3.365 for model `cool-sweep-29`. Check W&B [here](https://wandb.ai/yashbonde/blindfold-chess)
   - Best config till now has `--weight_decay=0.2606929941219779 --warmup_perc=0.21570177919850358 --lr=0.0008460163368533219 --batch_size=93` but was trained for only one epoch. I will trian another model but for longer epoch and see if there any benefits.
+  - Start building self-play data collection pipeline store zipped self-play dumps on AWS
+  - Include GPT-3 style LR scheduler
 
 - **13/12/2020** Some more updates:
   - After training 99 networks I havae realised that longer sequences train better networks.
