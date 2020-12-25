@@ -76,7 +76,7 @@ while not done:
     print(m,v,c)
 ```
 
-### Data
+## Data
 
 There are two sources for all the games [links.txt](./assets/links.txt) which has pgnmentor files and **ALL** games from FICS and second [links2000.txt](./assets/links2000.txt) which has all the games where average ELO > 2000 from FICS datasets. I am using the second file now and use 5% testing split. To prepare your own data run the script `download.py` as follows (**You will always have to create new links**):
 ```bash
@@ -96,7 +96,7 @@ python3 download.py -m 0.05 # couple of minutes
 
 # compile the dataset
 python download.py -c 85 npz
-# maxlen = 85 and store to *.npz file
+# maxlen = 85 and store to *.npz file allows you to have arbitrary test and train sizes
 ```
 
 **DEPRECATED:** This dataset is no longer used for training, the ZIP while will be available for a while but may be removed without warning.Download the ZIP using the following command:
@@ -108,7 +108,16 @@ unzip agg.zip
 
 This will download a zip file and extract to different files `agg_mv.txt` and `agg_res.txt` which are the moves file and results file respectively. (Read Credits for further clarification)
 
-### Training
+#### Data Distribution
+
+In the FICS games dataset we get the following distributions:
+
+<img src="assets/value_distribution.png">
+<img src="assets/move_distributions.png">
+
+Get the complete moves distributions in this [file](assest/../assets/dist.txt).
+
+## Training
 
 The if you have unzipped in same level as this repo then training is straightforward, run the command
 ```
