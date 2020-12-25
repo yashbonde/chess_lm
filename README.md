@@ -163,6 +163,11 @@ I need to come up with good metrics!
 
 ## Updates
 
+- **25/12/2020** Some more updates:
+  - Trained a model zoo using Weights & Biases Sweep functionality. Models now regularly hit as low as 0.73 on value loss.
+  - minimum `total_loss` is 3.365 for model `cool-sweep-29`. Check W&B [here](https://wandb.ai/yashbonde/blindfold-chess)
+  - Best config till now has `--weight_decay=0.2606929941219779 --warmup_perc=0.21570177919850358 --lr=0.0008460163368533219 --batch_size=93` but was trained for only one epoch. I will trian another model but for longer epoch and see if there any benefits.
+
 - **13/12/2020** Some more updates:
   - After training 99 networks I havae realised that longer sequences train better networks.
   - self-play code started, can fill a buffer

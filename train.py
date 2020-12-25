@@ -21,6 +21,7 @@ args.add_argument("--n_embd", type = int, default = 200, help = "embedding dim")
 args.add_argument("--n_layer", type = int, default = 10, help = "number of layers of the model")
 args.add_argument("--n_head", type = int, default = 10, help = "number of heads for MHA")
 args.add_argument("--model", type = str, default = "beta", help = "which model to train, select from `base`, `beta`")
+args.add_argument("--use_drop", type = bool, default = False, help = "set `True` to use dropout wuith value 0.1")
 
 # optim settings
 args.add_argument("--lr", type = float, default = 1e-4, help = "learning rate")
@@ -68,6 +69,8 @@ dataConfig = DataConfig(
 dstrain, dstest = get_datasets(dataConfig, args.split)
 print(dataConfig)
 
+# use dropout if defined
+drop_val = 0.1 if args.use_drop else 0.0
 modelConfig = ModelConfig(
     vocab_size = len(dstrain.m2id),
     n_positions=args.maxlen,
@@ -76,6 +79,9 @@ modelConfig = ModelConfig(
     n_layer=args.n_layer,
     n_head=args.n_head,
     loss_method = "mse", # add loss method for values
+    resid_pdrop=drop_val,
+    embd_pdrop=drop_val,
+    attn_pdrop=drop_val,
 )
 print(modelConfig)
 if args.model == "beta":

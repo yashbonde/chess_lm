@@ -52,7 +52,7 @@ class BaseHFGPT(nn.Module):
         logits = self.policy_head(x.last_hidden_state)
         values = self.value_head(x.last_hidden_state)
         out = (logits, values)
-        if loss is not None and value_targets is not None:            
+        if loss is not None and value_targets is not None:
             # Categorical cross entropy loss worked best for policy
             logits_reshape = logits[:, :-1, :].contiguous().view(-1, logits.size(-1))
             targets = input_ids[:, 1:].contiguous().view(-1)
@@ -63,7 +63,7 @@ class BaseHFGPT(nn.Module):
                 values = F.tanh(values)
                 loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
                 loss_value = loss_value.mean()
-            
+
             elif config.loss_method == "ce":
                 value_reshape = values[:, :-1].contiguous().view(-1, 3)
                 value_targets = value_targets[:, 1:].contiguous().view(-1) + 1 # [-1, 0, 1] --> [0, 1, 2]
@@ -99,7 +99,7 @@ class PolicyHead(nn.Module):
         self.attn = Attention(config.n_embd, config.n_ctx, config, scale = True)
         self.ln = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
         self.mlp = MLP(config.n_embd * 4, config)
-        
+
         # second block
         self.ln2 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
         self.attn2 = Attention(config.n_embd, config.n_ctx, config, scale=True)
@@ -107,7 +107,7 @@ class PolicyHead(nn.Module):
 
         # final head
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size)
-        
+
     def forward(self, hidden_states):
         # first block
         attn_output = self.attn(hidden_states)[0]
@@ -154,7 +154,7 @@ class ValueHead(nn.Module):
         hidden_states = self.ln3(hidden_states + attn_output) # residual connection
         out =  self.val_head(hidden_states) # value head
         return out
-        
+
 
 class BetaChess(nn.Module):
     def __init__(self, config):
@@ -163,7 +163,7 @@ class BetaChess(nn.Module):
         config = ModelConfig(**vars(self.config))
         config.n_layer = config.n_layer - 2
         self.body = GPT2Model(config) # residual tower in AlphaZero
-        
+
         # the policy head and value head are now similar to what is in AlphaZero
         self.policy_head = PolicyHead(config)
         self.value_head = ValueHead(config)
@@ -174,13 +174,13 @@ class BetaChess(nn.Module):
         logits = self.policy_head(x.last_hidden_state)
         values = self.value_head(x.last_hidden_state)
         out = (logits, values)
-        if loss is not None and value_targets is not None:            
+        if loss is not None and value_targets is not None:
             # no you stupid categorical cross entropy is not the loss function used for training
             # Categorical cross entropy loss worked best for policy
             logits_reshape = logits[:, :-1, :].contiguous().view(-1, logits.size(-1))
             targets = input_ids[:, 1:].contiguous().view(-1)
             loss_policy = F.cross_entropy(logits_reshape, targets)
-            
+
             # the loss function for policy is loss_policy = -pi.T*log(p)
             # logits_log = F.log_softmax(logits[:, :-1, :].contiguous().view(-1, logits.size(-1)), dim = -1)
             # targets = F.one_hot(targets).float() # convert to one hot encodings
@@ -191,13 +191,13 @@ class BetaChess(nn.Module):
                 values = F.tanh(values)
                 loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
                 loss_value = loss_value.mean()
-            
+
             elif config.loss_method == "ce":
                 value_reshape = values[:, :-1].contiguous().view(-1, 3)
                 value_targets = value_targets[:, 1:].contiguous().view(-1) + 1 # [-1, 0, 1] --> [0, 1, 2]
                 loss_value = F.cross_entropy(value_reshape, value_targets.long())
 
-            loss = loss_policy + loss_value # weight regularisation added in 
+            loss = loss_policy + loss_value # weight regularisation added in
 
             out = (logits, values, (loss, loss_policy, loss_value))
         return out
@@ -221,13 +221,13 @@ class ValueOnlyNetwork(nn.Module):
         x = self.gpt(input_ids, return_dict = True, **gptkwargs)
         values = self.value_head(x.last_hidden_state)
         out = (None, values)
-        if loss is not None and value_targets is not None:            
+        if loss is not None and value_targets is not None:
             if config.loss_method == "mse":
                 # MSE works best for value function
                 values = F.tanh(values)
                 loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
                 loss_value = loss_value.mean()
-            
+
             elif config.loss_method == "ce":
                 value_reshape = values[:, :-1].contiguous().view(-1, 3)
                 value_targets = value_targets[:, 1:].contiguous().view(-1) + 1 # [-1, 0, 1] --> [0, 1, 2]
@@ -248,7 +248,7 @@ class ModelConfig(PretrainedConfig):
     layer_norm_epsilon=1e-5
     initializer_range=0.2
     use_cache = True
-    
+
     def __init__(self, **kwargs):
         super().__init__(bos_token_id=0, eos_token_id=0)
         self.attrs = ["vocab_size", "n_positions", "n_ctx", "n_embd", "n_layer",
@@ -292,7 +292,7 @@ def configure_optimizers(model, train_config):
     for mn, m in model.named_modules():
         for pn, p in m.named_parameters():
             fpn = '%s.%s' % (mn, pn) if mn else pn # full param name
-            
+
             if "ValueHead" in fpn: # no decay for value head layers
                 no_decay.add(fpn)
 
@@ -311,7 +311,7 @@ def configure_optimizers(model, train_config):
     param_dict = {pn: p for pn, p in model.named_parameters()}
     inter_params = decay & no_decay
     union_params = decay | no_decay
-    
+
     assert len(inter_params) == 0, "parameters %s made it into both decay/no_decay sets!" % (str(inter_params), )
     assert len(param_dict.keys() - union_params) == 0, "parameters %s were not separated into either decay/no_decay set!" \
                                                 % (str(param_dict.keys() - union_params), )
@@ -355,7 +355,7 @@ class Trainer:
         test_data = self.test_dataset
         num_batches = len(train_data) // config.batch_size + int(len(train_data) % config.batch_size != 0)
         total_steps = num_batches * config.num_epochs
-        
+
         # we don't need to send all the hyper-parameters to wandb so instead we create a new dict
         hyperparameters = {
             "warmup_perc": config.warmup_perc,
@@ -363,7 +363,7 @@ class Trainer:
         }
         wandb.init(config=hyperparameters)  # add all the configurations
         wandb.watch(model)
-        
+
         # create step functions
         model.apply(init_weights)
 #         optimizer = torch.optim.Adam(
@@ -387,7 +387,7 @@ class Trainer:
                 max_lr=config.lr,
                 total_steps=total_steps
             )
-            
+
         elif config.scheduler == "MultiStepLR":
             scheduler = torch.optim.lr_scheduler.MultiStepLR(
                 optimizer=optimizer,
@@ -432,7 +432,7 @@ class Trainer:
                 return lr
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
             print("Using CosineDecay scheduler, warmup:", warmup, scheduler)
-        
+
         elif config.scheduler == "GPT3":
             scheduler = "GPT3"
 
@@ -451,7 +451,7 @@ class Trainer:
             train_losses = [-1]
             train_acc = [-1]
             model.train()
-            
+
             for gs, d in zip(pbar_train, dl_train):
                 # total steps is now the primary iteration method
                 d = {k:v.to(self.device) for k,v in d.items()}
@@ -488,7 +488,7 @@ class Trainer:
                     "loss_value": loss_value,
                     "move_acc": move_acc
                 }
-                
+
                 # calculate mse error if softmax activation used
                 if model_config.loss_method == "ce":
                     values = F.softmax(values[:, :-1, :], dim=-1).contiguous().view(-1, 3)  # [B, N, 3]
@@ -508,7 +508,7 @@ class Trainer:
                 optimizer.step()
                 if scheduler is not None and scheduler != "GPT3":
                     scheduler.step()
-                    
+
                 # ------------- LR SCHEDULING
                 elif scheduler == "GPT3":
                     # update learning rate
@@ -600,10 +600,10 @@ class Trainer:
                     else:
                         no_loss_steps += 1
                         print(f"... previous loss was smaller. No improvements for past {no_loss_steps} evaluations")
-                    
+
                     if config.patience != -1 and  no_loss_steps == config.patience:
                         break_training = True
-                        
+
                     model.train()
 
                 wandb.log(log_dict)
@@ -654,7 +654,7 @@ class TrainerConfig:
             self.final_tokens = 613256130  # total size of all the tokens
             self.warmup_tokens = int(self.final_tokens * self.warmup_perc)
             print("Auto Setting warmup_tokens using", self.warmup_perc, "to", self.warmup_tokens)
-            
+
         elif self.scheduler == "GPT3":
             assert self.final_tokens != None
             assert self.warmup_tokens != None
@@ -694,7 +694,7 @@ def get_datasets(config, split):
             m2id["[GAME]"] = GAME  # new game flag
         else:
             GAME = m2id["[GAME]"]
-    
+
     if config.lm[-4:] == "hdf5":
         # this is the hdf5
         st = time.time()
@@ -702,17 +702,17 @@ def get_datasets(config, split):
         lms = data["lms"]
         results = data["res"]
         print(f"HDF5 Loading took: {time.time()-st}s")
-        
+
     elif config.lm[-3:] == "npz":
         # this is numpy zip, load the pickle
         st = time.time()
         clm = np.load("data/clm.npz")
         lms = clm["lms"]
         results = clm["res"]
-        
+
         lms = lms.reshape(-1, config.maxlen)
         results = results.reshape(-1, config.maxlen)
-        
+
         print(f"Numpy Loading took: {time.time()-st}s")
 
     else:
@@ -791,7 +791,7 @@ class ChessData(IterableDataset):
         with open(config.lm, "r") as flm, open(config.rf, "r") as fres:
             lms = [] # all the sequences
             results = [] # all the results
-            for lm, game_res in zip(flm, fres):    
+            for lm, game_res in zip(flm, fres):
                 # ignore BOS + EOS tags, [GAME] does it for us
                 lm = list(map(lambda x: int(x.strip()), lm.split()))[1:-1]
                 lms.extend([self.GAME] + lm)
@@ -805,7 +805,7 @@ class ChessData(IterableDataset):
                 if len(lms) > config.buffer:
                     # print("\n\n\n", len(lms), len(results))
                     # print(len(lm), len(res))
-                    
+
                     # no of samples
                     batches = len(lms) // config.maxlen
                     samples = self._sliding_buckets(
@@ -852,7 +852,7 @@ class ChessDataInMemory(Dataset):
             lms = [] # all the sequences
             results = [] # all the results
             print("Loading samples in memory ... this will take some time")
-            for idx, lm, game_res in zip(trange(self.len), flm, fres):    
+            for idx, lm, game_res in zip(trange(self.len), flm, fres):
                 # ignore BOS + EOS tags, [GAME] does it for us
                 lm = list(map(lambda x: int(x.strip()), lm.split()))[1:-1]
                 lms.extend([self.GAME] + lm)
