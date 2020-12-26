@@ -2,7 +2,7 @@
 for reference (not used anywhere): https://www.pettingzoo.ml/classic
 
 torch is only used for neural network, the output values are converted to numpy
-and all the operations are then used for 
+and all the operations are then used for
 """
 import json
 import chess
@@ -16,7 +16,12 @@ from torch import Tensor
 from model import BaseHFGPT, ModelConfig, BetaChess
 
 
-def verbose_print(*args, verbose), verbose = verbose:
+################################################
+####### Helper Functions #######################
+################################################
+
+def verbose_print(*args, verbose):
+    # print only when verbose is Trues
     if verbose:
         print(*args)
 
@@ -29,10 +34,12 @@ def Move(x):
 
 
 def get_mv_ids(b, vocab):
+    # return move ids for this game's move stack
     return [vocab["[GAME]"]] + [vocab[str(x)[:4]] for x in b.move_stack]
 
 
 def check_board_state(b, verbose = False):
+    # check the board's state and return appropriate response
     done = False
     res = "game"
     # draw results
@@ -72,7 +79,6 @@ def check_board_state(b, verbose = False):
         done = True
         res = "win"
     return done, res
-
 
 
 ################################################
@@ -147,7 +153,7 @@ def top_p(x, p = 0.98):
     x_sorted_idx = np.argsort(x, axis = -1)[:, ::-1]
     cdf = np.cumsum(x_sorted, axis = -1)
     cdf_mask = np.greater(cdf, p)
-    
+
     # need to do list comprehension because there can be a shape mismatch
     cdf_idx = [[x_sorted_idx[i,j] for j,f in enumerate(mask) if f] for i,mask in enumerate(cdf_mask)]
     return cdf_idx
@@ -164,21 +170,21 @@ class Node():
         self.color = color # color of player taking this move
         self.rc = rc # root_node.color
         self.is_root = is_root # root node flag used for action selection
-        
+
         self.n = 0 # number of times this is visited, initialised with 0
         self.children = [] # all the children
         self.state = [str(x) for x in b.move_stack] # state at which this action was taken
         self.nsb = len(b.move_stack)
         self.action_value = 0 # what is the action value of taking this move
         self.inv_color = "white" if color == "black" else "black"
-        
+
     @property
     def total_nodes(self):
         n = 1
         for c in self.children:
             n += c.total_nodes
         return n
-    
+
     def all_children(self):
         c = []
         if self.children:
@@ -187,29 +193,29 @@ class Node():
         else:
             c = [self]
         return c
-    
+
     def get_adjusted_action_value(self):
         # this is the one given in MuZero paper
         const = 1.25 + np.log(1 + (1 + self.nsb)/19652) * (np.sqrt(self.nsb) / (1+self.n))
         value = self.action_value + self.p * const
         return value
-    
+
     def get_action_value_with_exploration(self):
         return self.action_value + 5 * self.p * np.sqrt(self.nsb) / (1+self.n)
 
     @property
     def terminal(self):
         return len(self.children) == 0
-    
+
     def __eq__(self, n):
         return self.move == n.move
-    
+
     def __len__(self):
         return len(self.children)
 
     def __repr__(self):
         return f"<Move '{self.move}'; q={self.action_value:.3f} v={self.state_value:.3f} c={len(self)}; n={self.n}; s={len(self.state)} nsb={self.nsb} p={self.p:.3f}>"
-    
+
     def __str__(self, level=0):
         ret = "  "*level+repr(self)+"\n"
         for child in self.children:
@@ -249,7 +255,7 @@ def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, mv_probs = None, v
         # special handling for firstm move
         mv_ids = [vocab[str(x)[:4]] for x in b.legal_moves] # valid moves
         mv_probs = np.ones(len(mv_ids), dtype=np.float) / len(mv_ids)
-    
+
     verbose_print("Given Root:", root.s, "played on board:", b.fen(), [inv_vocab[x] for x in mv_ids], verbose = verbose)
 
     mv_batched = np.asarray([[0] + [vocab[str(x)[:4]] for x in b.move_stack] + [l] for l in mv_ids])[:, :model.config.n_ctx]
@@ -262,7 +268,7 @@ def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, mv_probs = None, v
     all_possible_future_moves = []
     all_possible_future_moves_probs = []
     verbose_print("\nEntering Future possibilites determiner...", verbose = verbose)
-    
+
     for mv, mvp, lgt_mv, v_mv in zip(mv_ids, mv_probs, logits, values):
         # make one step in the future and return the best value
         future_legal, lgt_mv_probs, node = one_future(mv, mvp, lgt_mv, v_mv, vocab, inv_vocab, b, p =p, verbose =verbose)
@@ -280,7 +286,7 @@ def generate_tree(model, depth, board, root_node, vocab, inv_vocab, mv_ids = Non
     all_possible_future_moves, all_possible_future_moves_probs = one_step(model=model, b=board, root=root_node, mv_ids=mv_ids,
                                         verbose=verbose, vocab=vocab, inv_vocab=inv_vocab, mv_probs=mv_probs
     )
-    
+
     if depth > 1:
         verbose_print("Iterating over Children of", root_node.s, verbose = verbose)
         for mv_ids, mv_probs, child in zip(all_possible_future_moves, all_possible_future_moves_probs, root_node.children):
@@ -288,7 +294,7 @@ def generate_tree(model, depth, board, root_node, vocab, inv_vocab, mv_ids = Non
             bchild = board.copy()
             bchild.push(Move(child.move))
             generate_tree(
-                model = model, depth = depth - 1, board = bchild, root_node = child, 
+                model = model, depth = depth - 1, board = bchild, root_node = child,
                 mv_ids=mv_ids, verbose=verbose, vocab=vocab, inv_vocab=inv_vocab,
                 mv_probs=mv_probs
             )
@@ -339,18 +345,17 @@ def minimax(node, depth, _max=False):
 ################################################
 ####### Monte Carlo Tree Search ################
 ################################################
-
 def expand_tree(model, root_node, b, depth, vocab, inv_vocab, nodes_taken):
     mvs = get_mv_ids(b, vocab)[:model.config.n_ctx] # whatever has been played till now
     legal_moves = [vocab[str(x)[:4]] for x in b.legal_moves]
-    
+
     # step 1: for this root node I need to determine what are the probabilities of next move
     with torch.no_grad():
         logits, values = model(input_ids=Tensor(mvs).view(1, len(mvs)).long())
         logits_kp1 = logits[0, -1].numpy()  # [1, N]
         values_kp1 = values[0, -1].item()  # [1, 1]
         logits_kp1 = softmax(logits_kp1[legal_moves])
-        
+
     # EXPANSION
     # step 2: for all the next legal moves what are the probabilities and next board states
     mvs_batched = np.asarray([[*mvs] + [l] for l in legal_moves])[:, :model.config.n_ctx]
@@ -423,7 +428,7 @@ def backup(nodes_taken, discount_factor = 1):
             bootstrap += (discount_factor**j) * n2.state_value
         n.action_value = (n.n*n.action_value + bootstrap) / (n.n + 1)
         n.n = n.n + 1
-        
+
 def mcts(model, root_node, b, depth, vocab, inv_vocab, sims = 10, _trange = True):
     pbar = trange(sims) if _trange else range(sims)
     for i in pbar:
@@ -449,10 +454,14 @@ def select_action(n, t=1):
 ################################################
 ####### Self-Play ##############################
 ################################################
-
+class BufferMovePoint:
+    def __init__(self, move, value, game_id):
+        self.move = move
+        self.value = value
+        self.game_id = game_id
 
 def self_play_one_game(
-        m1, m2, vocab, inv_vocab, replay_buffer = None,
+        m1, m2, vocab, inv_vocab, game_id, replay_buffer = None,
         max_moves = 10, depth = 10, sims = 10,
         verbose = False
     ):
@@ -462,13 +471,12 @@ def self_play_one_game(
     m2: Player object
     vocab: vocab
     inv_vocab: inv_vocab
+    game_id: this game ID
     replay_buffer: list in which this games data will be extended
     max_moves: maximum numebr of moves to take in the game
     depth: depth of the search tree
     sims: number of simulations to do for MCTS
     """
-    # print_mcts, select_action
-    
     # we are going to start the game from scratch
     game = GameEngine()
     col = None
@@ -482,7 +490,7 @@ def self_play_one_game(
 
         # now board is player till n_moves, root_node (k=0, s^0) = s_{n_moves}
         legal_moves = [vocab[str(x)[:4]] for x in b.legal_moves]
-        moves = get_mv_ids(b, vocab)    
+        moves = get_mv_ids(b, vocab)
         with torch.no_grad():
             logits, values = model(input_ids = Tensor(moves).view(1, len(moves)).long())
             values = values[0, -1].item()
@@ -498,8 +506,9 @@ def self_play_one_game(
             rc = "white",
             is_root = True
         )
-        
-        this_game_buffer.append((vocab[move_str], values))
+
+        # update buffer
+        this_game_buffer.append(BufferMovePoint(vocab[move_str], values, game_id))
 
         # perform mcts and get the policy distribution
         mcts(model, root_node, b, depth, vocab, inv_vocab, sims = sims, _trange = False)
@@ -511,73 +520,16 @@ def self_play_one_game(
         if done:
             verbose_print(f"Game is over at step {mid + 1} and player color {col} --> {res}", verbose = verbose)
             break
-            
+
     if replay_buffer is not None:
         replay_buffer.extend(this_game_buffer)
         return col, res, replay_buffer
     else:
         return col, res, this_game_buffer
 
-def learn_by_self_play(model, model_ckpt_path, num_games, train_every, buffer_size, tournament_size, vocab, inv_vocab, trainer_config):
-    """
-    this method takes in a model, makes a dataset from competing with each other over a certain
-    number of steps and then trains once the buffer is full and performs a tournament between the
-    players to idenitify the best model.
-    
-    Returns:
-        best_model_path: path to check point the best model
-    """
-    buffer = []
-    trainer = SelfPlayTrainer(trainer_config)
-    best_model_path = None
-    for i in range(num_games):
-        self_play_one_game(model, model, vocab, inv_vocab, buffer, max_moves = 10, depth = 3, sims = 2)
-        
-        # free up memory
-        if len(buffer) > buffer_size:
-            # keep the latest samples for training
-            del buffer[:len(buffer) - buffer_size]
-        
-        if i and i % train_every == 0:
-            # section where we train the model --> convert the buffer into a torch.data.Dataset for feeding
-            # into the SelfPlayTrainer object directly
-            
-            model.train()
-            trainer.train(buffer) # train on this buffer
-            latest_ckpt_path = trainer.save_checkpoint() # save after training 
-            model.eval()
-    
-            # now the training is complete so perform a tournament and update the best model
-            best_model_path = model_ckpt_path if best_model_path == None else best_model_path
-            best_model = BaseHFGPT(model.config)
-            best_model = best_model.load_state_dict(torch.load(best_model_path, map_location = "cpu"))
-            new_model_win = 0
-            for t in range(tournament_size):
-                # for ~50% of cases play as white and other times play as black
-                if t%2 == 0:
-                    m1 = model
-                    m2 = best_model
-                    win_col = "white"
-                else:
-                    m1 = best_model
-                    m2 = model
-                    win_col = "black"
-                col, res = self_play_one_game(m1, m2, vocab, inv_vocab, None, max_moves = 10, depth = 3, sims = 2)
-                if res == "win" and col == win_col:
-                    # new model won
-                    new_model_win += 1
-                
-            # if the new player wins 55% of the games then update the path
-            if new_model_win / tournament_size > 0.55:
-                best_model_path = latest_ckpt_path
-                
-    return best_model_path
-
-
 ################################################
 ####### Player #################################
 ################################################
-
 class Player():
     def __init__(self, config, save_path, vocab_path, model_class, search = "sample", depth = 1):
         if search not in ["sample", "greedy", "minimax", "mcts"]:
@@ -588,7 +540,7 @@ class Player():
 
         self.config = config
         self.save_path = save_path
-        
+
         with open(vocab_path, "r") as f:
             self.vocab = json.load(f)
             self.inv_vocab = {v: k for k, v in self.vocab.items()}
@@ -637,7 +589,7 @@ class Player():
             x = np.random.rand(n - m)
             if m > 0:
                 p[found[0:m]] = 0
-            
+
             cdf = np.cumsum(p)
             cdf /= cdf[-1]
             cdf[-1] = min(cdf[-1], 1.)
@@ -646,7 +598,7 @@ class Player():
             unique_indices.sort()
             new  = new.take(unique_indices)
             found[m:m+new.size] = new
-            
+
             m += new.size
 
         return a[found]
@@ -677,7 +629,7 @@ class Player():
             logits, values = model(input_ids=moves)
             logits = logits[0, -1]  # [B,N,V] --> [V]
             value = values[0, -1].item()  # [B,N,1] --> scalar
-            
+
             # softmax over legal moves, get the log-probabilities for legal moves
             lg_mask = logits.numpy()[legal_idx]
             lg_mask = softmax(lg_mask)
@@ -803,7 +755,7 @@ if __name__ == "__main__":
         pgn_writer.headers["White"] = "z4_0"
         pgn_writer.headers["Black"] = "q1_15000"
         pgn_writer.headers["Round"] = str(round)
-        
+
         # play
         mv = 0
         done = False
