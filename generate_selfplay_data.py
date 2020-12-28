@@ -8,11 +8,13 @@ Jesus Christ Jayanti ki Shubhkamnaye!
 25.12.2020 - @yashbonde
 """
 
+import re
 import os
 import json
 import math
 import boto3
 import elote
+import pickle
 import numpy as np
 from uuid import uuid4
 from tqdm import trange
@@ -186,7 +188,8 @@ class SelfPlayTrainerConfig:
 
 class SelfPlayManager:
     bucket = BUCKET # assign the global bucket
-    def __init___(self, config, vocab, inv_vocab, best_model_config, m1_elo = 1400, m2_elo = 1400, verbose = False):
+    files_on_aws = [obj.key for obj in bucket.objects.all()]
+    def __init___(self, config, vocab, inv_vocab, best_model_config, trainer_config, m1_elo = 1400, m2_elo = 1400, verbose = False):
         """
         when training we always train self._m2 model for ease and copy weights to self._m1 model
         """
@@ -208,6 +211,9 @@ class SelfPlayManager:
         self._m1_elo = m1_elo # initial ELO rating
         self._m2_elo = m2_elo # initial ELO rating
 
+        # load the trainer object
+        self.trainer = SelfPlayTrainer(trainer_config, self._m2)
+
         # class op vars
         self.buffer_name = str(uuid4())
         self.buffer = []
@@ -218,9 +224,18 @@ class SelfPlayManager:
         this function first is supposed to pickle the new dump then update the meta of
         the dump.
         """
-        print("Uploading buffer")
-        self.bucket.upload_file(local_path)
-        pass
+        gids = [re.findall(r"\d+", x) for x in self.files_on_aws if "dump" in x]
+        max_game_id = 0
+        for g in gids:
+            max_game_id = max(max(g), max_game_id)
+
+        fname = f"./dump_{max_game_id+1}_{max_game_id+self.game_counter}.pkl"
+        with open(fname, "wb"):
+            pickle.dump(self.buffer)
+        print(f"Uploading buffer ... {fname}", end = "")
+        self.bucket.upload_file(fname, fname) # local, cloud
+        print(" Completed Storing!")
+
 
     def update_elo(self):
         # we are using BayesElo as proposed here and used in Alpha/Mu Zero for Chess
@@ -396,6 +411,8 @@ if __name__ == "__main__":
         sims=args.sims,
         buffer_size=args.buffer_size,
     )
+
+    # config for trainer
 
     manager = SelfPlayManager(
         config=selfplay_config,
