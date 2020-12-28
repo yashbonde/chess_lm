@@ -122,4 +122,4 @@ trainerConf = TrainerConfig(
 )
 trainer = Trainer(model, dstrain, trainerConf, dstest)
 print(trainerConf)
-trainer.train(args)
+trainer.train()

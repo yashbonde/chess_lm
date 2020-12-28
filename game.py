@@ -8,8 +8,9 @@ import json
 import chess
 import chess.pgn
 import numpy as np
-from tqdm import trange
 from time import time
+from tqdm import trange
+from types import SimpleNamespace
 
 import torch
 from torch import Tensor
@@ -454,12 +455,6 @@ def select_action(n, t=1):
 ################################################
 ####### Self-Play ##############################
 ################################################
-class BufferMovePoint:
-    def __init__(self, move, value, game_id):
-        self.move = move
-        self.value = value
-        self.game_id = game_id
-
 def self_play_one_game(
         m1, m2, vocab, inv_vocab, game_id, replay_buffer = None,
         max_moves = 10, depth = 10, sims = 10,
@@ -492,13 +487,13 @@ def self_play_one_game(
         legal_moves = [vocab[str(x)[:4]] for x in b.legal_moves]
         moves = get_mv_ids(b, vocab)
         with torch.no_grad():
-            logits, values = model(input_ids = Tensor(moves).view(1, len(moves)).long())
-            values = values[0, -1].item()
+            logits, value = model(input_ids = Tensor(moves).view(1, len(moves)).long())
+            value = value[0, -1].item()
             logits = softmax(logits[0, -1, legal_moves].numpy())
         # root_node = Node(state_value = values, move = "[GAME]", p = 0., b = b, color = "white", rc = "white")
         move_str = str(b.move_stack[-1]) if b.move_stack else "[GAME]"
         root_node = Node(
-            state_value = values,
+            state_value = value,
             move = move_str,
             p = 0.,
             b = b,
@@ -507,8 +502,12 @@ def self_play_one_game(
             is_root = True
         )
 
-        # update buffer
-        this_game_buffer.append(BufferMovePoint(vocab[move_str], values, game_id))
+        # update buffer with the last move taken
+        this_game_buffer.append(SimpleNamespace(
+            move_id = vocab[move_str],
+            value = value,
+            game_id = game_id
+        ))
 
         # perform mcts and get the policy distribution
         mcts(model, root_node, b, depth, vocab, inv_vocab, sims = sims, _trange = False)
@@ -517,9 +516,18 @@ def self_play_one_game(
         move = Move(inv_vocab[action])
         verbose_print(policy, action, "--->", move, verbose = verbose)
         done, res = game.step(move)
+        end_value = 0.
         if done:
             verbose_print(f"Game is over at step {mid + 1} and player color {col} --> {res}", verbose = verbose)
+            if res == "win":
+                end_value = +1.
             break
+
+    this_game_buffer.append(SimpleNamespace(
+        move_id = vocab[str(move)],
+        value = end_value,
+        game_id=game_id
+    ))
 
     if replay_buffer is not None:
         replay_buffer.extend(this_game_buffer)

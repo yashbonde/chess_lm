@@ -348,7 +348,7 @@ class Trainer:
         print(f"Saving Model at {ckpt_path}")
         torch.save(raw_model.state_dict(), ckpt_path)
 
-    def train(self, args):
+    def train(self):
         model, config = self.model, self.config
         model_config = self.model.module.config if hasattr(self.model, "module") else self.model.config
         train_data = self.train_dataset
