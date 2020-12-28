@@ -22,18 +22,21 @@ from types import SimpleNamespace
 from argparse import ArgumentParser
 
 from game import self_play_one_game, verbose_print
-from model import ModelConfig, BetaChess, configure_optimizers, FullDatasetPreLoaded
+from model import ModelConfig, BetaChess, FullDatasetPreLoaded, configure_optimizers
 
 import torch
 import torch.nn.functional as F
 from torch.utils.data.dataloader import DataLoader
 
+# assign the global bucket
 BUCKET_NAME = "chess-lm-bucket"
 BUCKET = boto3.resource("s3").Bucket(BUCKET_NAME)
+FILES_ON_AWS = [obj.key for obj in BUCKET.objects.all()]
 
-class SelfPlayTrainer():
-    def __init__(self, config, init_model):
+class SelfPlayTrainer:
+    def __init__(self, config, init_model, device):
         self.config = config
+        self.device = device
         self.best_model = None  # best model till now
 
         # get AdamW optimiser for this model
@@ -187,9 +190,7 @@ class SelfPlayTrainerConfig:
 
 
 class SelfPlayManager:
-    bucket = BUCKET # assign the global bucket
-    files_on_aws = [obj.key for obj in bucket.objects.all()]
-    def __init___(self, config, vocab, inv_vocab, best_model_config, trainer_config, m1_elo = 1400, m2_elo = 1400, verbose = False):
+    def __init__(self, config, vocab, inv_vocab, best_model_config, trainer_config, m1_elo = 1400, m2_elo = 1400, verbose = False):
         """
         when training we always train self._m2 model for ease and copy weights to self._m1 model
         """
@@ -203,16 +204,23 @@ class SelfPlayManager:
         self._m2 = BetaChess(best_model_config)
 
         # load the initial models and set to eval mode
-        print("Loading initial models from checkpoint:", best_model_config.model_path)
-        self._m1.load_state_dict(torch.load(best_model_config.model_path))
-        self._m2.load_state_dict(torch.load(best_model_config.model_path))
+        self.device = "cpu" if not torch.cuda.is_available() else torch.cuda.current_device()
+        print("Loading initial models from checkpoint:", best_model_config.model_path, "::: to device:", self.device)
+        self._m1.load_state_dict(torch.load(best_model_config.model_path, map_location=self.device))
+        self._m2.load_state_dict(torch.load(best_model_config.model_path, map_location=self.device))
         self._m1.eval()
         self._m2.eval()
         self._m1_elo = m1_elo # initial ELO rating
         self._m2_elo = m2_elo # initial ELO rating
 
+        if "cuda" in self.device:
+            # now paralelize
+            self._m1 = torch.nn.DataParallel(self._m1).to(self.device)
+            self._m2 = torch.nn.DataParallel(self._m2).to(self.device)
+            print("Model is now CUDA!")
+
         # load the trainer object
-        self.trainer = SelfPlayTrainer(trainer_config, self._m2)
+        self.trainer = SelfPlayTrainer(trainer_config, self._m2, self.device)
 
         # class op vars
         self.buffer_name = str(uuid4())
@@ -224,7 +232,7 @@ class SelfPlayManager:
         this function first is supposed to pickle the new dump then update the meta of
         the dump.
         """
-        gids = [re.findall(r"\d+", x) for x in self.files_on_aws if "dump" in x]
+        gids = [re.findall(r"\d+", x) for x in FILES_ON_AWS if "dump" in x]
         max_game_id = 0
         for g in gids:
             max_game_id = max(max(g), max_game_id)
@@ -233,7 +241,7 @@ class SelfPlayManager:
         with open(fname, "wb"):
             pickle.dump(self.buffer)
         print(f"Uploading buffer ... {fname}", end = "")
-        self.bucket.upload_file(fname, fname) # local, cloud
+        BUCKET.upload_file(fname, fname) # local, cloud
         print(" Completed Storing!")
 
 
@@ -380,10 +388,12 @@ if __name__ == "__main__":
     )
     args.add_argument("--best_model_path", type=str, required = True, help="path to checkpoint file to best model")
     args.add_argument("--m2id", type=str, default = "assets/moves.json", help="path to move_to_id json")
-    args.add_argument("--max_moves", type=int, default = 180, help="path to move_to_id json")
-    args.add_argument("--depth", type=int, default = 80, help="path to move_to_id json")
-    args.add_argument("--sims", type=int, default = 10, help="path to move_to_id json")
-    args.add_argument("--buffer_size", type=int, default = 10000, help="path to move_to_id json")
+    args.add_argument("--max_moves", type=int, default = 10, help="number of moves to play in the game")
+    args.add_argument("--depth", type=int, default = 2, help="max tree depth in recursion for MCTS")
+    args.add_argument("--sims", type=int, default = 2, help="number of simulations to perform for each move")
+    args.add_argument("--buffer_size", type=int, default = 10000, help="total training buffer size")
+    args.add_argument("--n_data_collection_games", type=int, default = 10, help="total games to perform in each training loop for data collection")
+    args.add_argument("--n_evaluation_games", type=int, default = 2, help="number of games for evaluation")
     args = args.parse_args()
 
     # load vocab
@@ -403,6 +413,7 @@ if __name__ == "__main__":
         vocab_path = args.m2id,
         model_path = args.best_model_path
     )
+    print(best_model_config)
 
     # config for SelfPlay
     selfplay_config = SelfPlayConfig(
@@ -411,12 +422,31 @@ if __name__ == "__main__":
         sims=args.sims,
         buffer_size=args.buffer_size,
     )
+    print(selfplay_config)
 
     # config for trainer
+    trainer_config = SelfPlayTrainerConfig(
+        num_epochs=2,
+        batch_size=64,
+        lr=3e-4,
+        betas=(0.9, 0.95),
+        grad_norm_clip=1.0,
+        ckpt_path=None,
+        save_every=None,
+        scheduler="GPT-3", # default, right now we only support GPT-3 style
+        weight_decay=0.1,
+        warmup_perc=0.1,
+        warmup_tokens=100,
+        final_tokens=10000,
+    )
+    print(trainer_config)
 
     manager = SelfPlayManager(
         config=selfplay_config,
         vocab=vocab,
+        trainer_config = trainer_config,
         inv_vocab=inv_vocab,
-        best_model_config=best_model_config
+        best_model_config=best_model_config,
+        verbose = True
     )
+    print(manager)
