@@ -10,7 +10,7 @@ Jesus Christ Jayanti ki Shubhkamnaye!
 
 import os
 import json
-
+import math
 import boto3
 import elote
 import numpy as np
@@ -23,66 +23,11 @@ from game import self_play_one_game, verbose_print
 from model import ModelConfig, BetaChess, configure_optimizers, FullDatasetPreLoaded
 
 import torch
+import torch.nn.functional as F
+from torch.utils.data.dataloader import DataLoader
 
 BUCKET_NAME = "chess-lm-bucket"
 BUCKET = boto3.resource("s3").Bucket(BUCKET_NAME)
-
-
-def learn_by_self_play(model, model_ckpt_path, num_games, train_every, buffer_size, tournament_size, vocab, inv_vocab, trainer_config):
-    """
-    this method takes in a model, makes a dataset from competing with each other over a certain
-    number of steps and then trains once the buffer is full and performs a tournament between the
-    players to idenitify the best model.
-
-    Returns:
-        best_model_path: path to check point the best model
-    """
-    buffer = []
-    trainer = SelfPlayTrainer(trainer_config)
-    best_model_path = None
-    for i in range(num_games):
-        self_play_one_game(model, model, vocab, inv_vocab, buffer, max_moves = 10, depth = 3, sims = 2)
-
-        # free up memory
-        if len(buffer) > buffer_size:
-            # keep the latest samples for training
-            del buffer[:len(buffer) - buffer_size]
-
-        if i and i % train_every == 0:
-            # section where we train the model --> convert the buffer into a torch.data.Dataset for feeding
-            # into the SelfPlayTrainer object directly
-
-            model.train()
-            trainer.train(buffer) # train on this buffer
-            latest_ckpt_path = trainer.save_checkpoint() # save after training
-            model.eval()
-
-            # now the training is complete so perform a tournament and update the best model
-            best_model_path = model_ckpt_path if best_model_path == None else best_model_path
-            best_model = BaseHFGPT(model.config)
-            best_model = best_model.load_state_dict(torch.load(best_model_path, map_location = "cpu"))
-            new_model_win = 0
-            for t in range(tournament_size):
-                # for ~50% of cases play as white and other times play as black
-                if t%2 == 0:
-                    m1 = model
-                    m2 = best_model
-                    win_col = "white"
-                else:
-                    m1 = best_model
-                    m2 = model
-                    win_col = "black"
-                col, res = self_play_one_game(m1, m2, vocab, inv_vocab, None, max_moves = 10, depth = 3, sims = 2)
-                if res == "win" and col == win_col:
-                    # new model won
-                    new_model_win += 1
-
-            # if the new player wins 55% of the games then update the path
-            if new_model_win / tournament_size > 0.55:
-                best_model_path = latest_ckpt_path
-
-    return best_model_path
-
 
 class SelfPlayTrainer():
     def __init__(self, config, init_model):
@@ -92,6 +37,8 @@ class SelfPlayTrainer():
         # get AdamW optimiser for this model
         self.optimizer = configure_optimizers(init_model, config)
         print("Currently the system will only use a GPT-3 style scheduler")
+        self.scheduler = None
+        self.processed_tokens = 0  # number of tokens processed till now
 
     def save_checkpoint(self, ckpt_path = None):
         raw_model = self.model.module if hasattr(self.model, "module") else self.model
@@ -104,33 +51,137 @@ class SelfPlayTrainer():
         the buffer is a very long list of <BufferMovePoint> objects
         """
         model.train()
+        config = self.config
         model_config = model.config
 
         # step 1: shape the buffer
-        lms, results = np.split(np.array([x.]))
-        ds_buffer = FullDatasetPreLoaded(lms, results, m2id = None)
+        lms, results = np.split(np.array([(x.move_id, x.value) for x in buffer]), axis = -1)
+        train_data = FullDatasetPreLoaded(lms, results, m2id = None)
+        num_batches = len(train_data) // config.batch_size + int(len(train_data) % config.batch_size != 0)
+        total_steps = num_batches * config.num_epochs
+        pbar_train = trange(total_steps, ncols=100)
+        dl_train = DataLoader(dataset=train_data, pin_memory=True, batch_size=config.batch_size, shuffle=train_data.shuffle)
+        prev_train_loss = 100000 # what was the training loss in previous testing cycle
+        no_loss_steps = 0 # no of steps since there was devrease in the loss
+        break_training = False
+        train_losses = [-1]
+        train_acc = [-1]
 
+        for gs, d in zip(pbar_train, dl_train):
+            # total steps is now the primary iteration method
+            d = {k:v.to(self.device) for k,v in d.items()}
+            pbar_train.set_description(f"[TRAIN] GS: {gs}, Loss: {round(train_losses[-1], 5)}, Acc: {train_acc[-1]}")
 
+            # get model results
+            (policy, values, loss) = model(loss=True, **d)
+            loss_total = loss[0].mean() # gather
+            if not isinstance(loss[1], int):
+                loss_policy = loss[1].mean().item() # gather
+            else:
+                loss_policy = -1
+            loss_value = loss[2].mean().item()  # gather
+            train_losses.append(loss_total.item())
 
-        # update learning rate
-        processed_tokens += d["input_ids"].size(0) * model_config.n_ctx # batch_size * number of tokens in each sequence
-        if processed_tokens < config.warmup_tokens:
-            # linear warmup
-            lr_mult = float(processed_tokens) / float(max(1, config.warmup_tokens))
-        else:
-            # cosine learning rate decay
-            progress = float(processed_tokens - config.warmup_tokens) / float(max(1, config.final_tokens - config.warmup_tokens))
-            lr_mult = max(0.1, 0.5 * (1.0 + math.cos(math.pi * progress)))
-        lr = config.lr * lr_mult
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
-        log_dict.update({"lr": lr})
-        pass
+            # calculate move accuracy
+            move_acc = 0
+            if policy is not None:
+                policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
+                policy = torch.argmax(policy, dim=-1)
+                targets = d["input_ids"][:, 1:].contiguous().view(-1)
+                move_acc = sum(targets == policy).item()
+                move_acc /= targets.size(0)
+                train_acc.append(move_acc)
 
+            log_dict = {
+                "loss_total": loss_total,
+                "loss_policy": loss_policy,
+                "loss_value": loss_value,
+                "move_acc": move_acc
+            }
+
+            # backprop
+            loss_total.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
+            self.optimizer.step()
+            if self.scheduler is not None and self.scheduler != "GPT3":
+                last_lr = self.scheduler.get_last_lr()[0]
+                log_dict.update({"lr": last_lr})
+                self.scheduler.step()
+
+            # ------------- LR SCHEDULING
+            elif self.scheduler == "GPT3":
+                # update learning rate
+                self.processed_tokens += d["input_ids"].size(0) * model_config.n_ctx # batch_size * number of tokens in each sequence
+                if self.processed_tokens < config.warmup_tokens:
+                    # linear warmup
+                    lr_mult = float(self.processed_tokens) / float(max(1, config.warmup_tokens))
+                else:
+                    # cosine learning rate decay
+                    progress = float(self.processed_tokens - config.warmup_tokens) / float(max(1, config.final_tokens - config.warmup_tokens))
+                    lr_mult = max(0.1, 0.5 * (1.0 + math.cos(math.pi * progress)))
+                lr = config.lr * lr_mult
+                for param_group in self.optimizer.param_groups:
+                    param_group['lr'] = lr
+                log_dict.update({"lr": lr})
+            # ------------- LR SCHEDULING
+
+            if gs % config.save_every == 0:
+                cp = config.ckpt_path.replace(".pt", f"_{gs}.pt")
+                self.save_checkpoint(cp)
 
 
 class SelfPlayTrainerConfig:
-    buffer_size = None
+    num_epochs = 2
+    batch_size = 64
+    lr = 3e-4
+    betas = (0.9, 0.95)
+    grad_norm_clip = 1.0
+    num_workers = 0 # for DataLoader
+    ckpt_path = None
+    tb_path = None
+    patience = -1
+    save_every = None
+    scheduler = None
+    weight_decay = 0.1
+    warmup_perc = None
+    warmup_tokens = None
+    final_tokens = None
+
+    def __init__(self, **kwargs):
+        self.attrs = [
+            "num_epochs", "batch_size", "lr", "betas", "grad_norm_clip", "num_workers",
+            "ckpt_path", "tb_path", "patience", "save_every", "scheduler", "weight_decay",
+            "warmup_perc", "warmup_tokens", "final_tokens",
+        ]
+        for k,v in kwargs.items():
+            setattr(self, k, v)
+            self.attrs.append(k)
+
+        if self.scheduler == "CosineAnnealingWarmRestarts":
+            assert hasattr(self, "t0div"), "Provide this if using CosineAnnealingWarmRestarts Scheduler"
+            assert hasattr(self, "tmult"), "Provide this if using CosineAnnealingWarmRestarts Scheduler"
+
+        elif self.scheduler in ["NoamDecay", "CosineDecay", "WarmupConstant"]:
+            assert hasattr(self, "warmup_perc"), "Provide Warmup percentage"
+
+        elif self.scheduler in ["CosineDecayJitter"]:
+            assert hasattr(self, "warmup_perc"), "Provide Warmup percentage"
+            assert hasattr(self, "jitter_scale"), "Provide jitter scale"
+
+        if self.warmup_tokens == None:
+            # total tokens // (batch_size * 170)
+            self.final_tokens = 613256130  # total size of all the tokens
+            self.warmup_tokens = int(self.final_tokens * self.warmup_perc)
+            print("Auto Setting warmup_tokens using", self.warmup_perc, "to", self.warmup_tokens)
+
+        elif self.scheduler == "GPT3":
+            assert self.final_tokens != None
+            assert self.warmup_tokens != None
+
+    def __repr__(self):
+        return "---- SELFPLAY TRAINER CONFIGURATION ----\n" + \
+            "\n".join([f"{k}\t{getattr(self, k)}" for k in list(set(self.attrs))
+        ]) + "\n"
 
 
 class SelfPlayManager:

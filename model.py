@@ -622,6 +622,7 @@ class Trainer:
             print("Final Step Save")
             cp = config.ckpt_path.replace(".pt", f"_{gs}.pt")
             self.save_checkpoint(cp)
+
 class TrainerConfig:
     num_epochs = 2
     batch_size = 64

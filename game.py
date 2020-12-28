@@ -523,6 +523,7 @@ def self_play_one_game(
                 end_value = +1.
             break
 
+    # add the last move taken in the buffer
     this_game_buffer.append(SimpleNamespace(
         move_id = vocab[str(move)],
         value = end_value,
