@@ -211,7 +211,7 @@ class SelfPlayManager:
         self._m2 = BetaChess(best_model_config)
 
         # load the initial models and set to eval mode
-        self.device = "cpu" if not torch.cuda.is_available() else torch.cuda.current_device()
+        self.device = "cpu" if not torch.cuda.is_available() else f"cuda:{torch.cuda.current_device()}"
         print("Loading initial models from checkpoint:", best_model_config.model_path, "::: to device:", self.device)
         self._m1.load_state_dict(torch.load(best_model_config.model_path, map_location=self.device))
         self._m2.load_state_dict(torch.load(best_model_config.model_path, map_location=self.device))
@@ -329,7 +329,8 @@ class SelfPlayManager:
                         replay_buffer=None,
                         max_moves=config.max_moves,
                         depth=config.depth,
-                        sims=config.sims
+                        sims=config.sims,
+                        _trange_moves=self.verbose
                     )
                     self.game_counter += 1
                     self.buffer.extend(moves)
@@ -374,7 +375,8 @@ class SelfPlayManager:
                         replay_buffer=None,
                         max_moves=config.max_moves,
                         depth=config.depth,
-                        sims=config.sims
+                        sims=config.sims,
+                        _trange=self.verbose
                     )
                     if res == "win" and col == win_col:
                         # new model won
@@ -431,10 +433,10 @@ if __name__ == "__main__":
     )
     args.add_argument("--best_model_path", type=str, required = True, help="path to checkpoint file to best model")
     args.add_argument("--m2id", type=str, default = "assets/moves.json", help="path to move_to_id json")
-    args.add_argument("--max_moves", type=int, default = 10, help="number of moves to play in the game")
-    args.add_argument("--depth", type=int, default = 5, help="max tree depth in recursion for MCTS")
-    args.add_argument("--sims", type=int, default = 1, help="number of simulations to perform for each move")
-    args.add_argument("--buffer_size", type=int, default = 10000, help="total training buffer size")
+    args.add_argument("--max_moves", type=int, default = 100, help="number of moves to play in the game")
+    args.add_argument("--depth", type=int, default = 10, help="max tree depth in recursion for MCTS")
+    args.add_argument("--sims", type=int, default = 10, help="number of simulations to perform for each move")
+    args.add_argument("--buffer_size", type=int, default = int(1e9), help="total training buffer size")
     args.add_argument("--n_data_collection_games", type=int, default = 100, help="total games to perform in each training loop for data collection")
     args.add_argument("--n_evaluation_games", type=int, default = 4, help="number of games for evaluation")
     args = args.parse_args()

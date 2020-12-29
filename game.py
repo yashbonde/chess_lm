@@ -14,12 +14,16 @@ from types import SimpleNamespace
 
 import torch
 from torch import Tensor
+import torch.nn.functional as F
 from model import BaseHFGPT, ModelConfig, BetaChess
 
 
 ################################################
 ####### Helper Functions #######################
 ################################################
+
+def get_model_config(model):
+    return model.module.config if hasattr(model, "module") else model.config
 
 def verbose_print(*args, verbose):
     # print only when verbose is Trues
@@ -259,7 +263,7 @@ def one_step(model, b, root, vocab, inv_vocab, mv_ids = None, mv_probs = None, v
 
     verbose_print("Given Root:", root.s, "played on board:", b.fen(), [inv_vocab[x] for x in mv_ids], verbose = verbose)
 
-    mv_batched = np.asarray([[0] + [vocab[str(x)[:4]] for x in b.move_stack] + [l] for l in mv_ids])[:, :model.config.n_ctx]
+    mv_batched = np.asarray([[0] + [vocab[str(x)[:4]] for x in b.move_stack] + [l] for l in mv_ids])[:, :get_model_config(model).n_ctx]
     with torch.no_grad():
         logits, values = model(input_ids = torch.Tensor(mv_batched).long())
         logits = logits[:, -1].numpy() # for each move, what is the distribution of future moves
@@ -347,23 +351,34 @@ def minimax(node, depth, _max=False):
 ####### Monte Carlo Tree Search ################
 ################################################
 def expand_tree(model, root_node, b, depth, vocab, inv_vocab, nodes_taken):
-    mvs = get_mv_ids(b, vocab)[:model.config.n_ctx] # whatever has been played till now
+    mvs = get_mv_ids(b, vocab)[:get_model_config(model).n_ctx] # whatever has been played till now
     legal_moves = [vocab[str(x)[:4]] for x in b.legal_moves]
 
     # step 1: for this root node I need to determine what are the probabilities of next move
     with torch.no_grad():
         logits, values = model(input_ids=Tensor(mvs).view(1, len(mvs)).long())
-        logits_kp1 = logits[0, -1].numpy()  # [1, N]
         values_kp1 = values[0, -1].item()  # [1, 1]
-        logits_kp1 = softmax(logits_kp1[legal_moves])
+
+        # before we were directly using the CPU version now we perform softmax on GPU
+        # logits_kp1 = logits[0, -1].numpy()  # [1, N]
+        # logits_kp1 = softmax(logits_kp1[legal_moves])
+        if "cuda" in str(next(model.parameters()).device):
+            logits = F.softmax(logits[0, -1, legal_moves], dim = -1).cpu().numpy()
+        else:
+            logits = softmax(logits[0, -1, legal_moves].numpy())
 
     # EXPANSION
     # step 2: for all the next legal moves what are the probabilities and next board states
-    mvs_batched = np.asarray([[*mvs] + [l] for l in legal_moves])[:, :model.config.n_ctx]
+    mvs_batched = np.asarray([[*mvs] + [l] for l in legal_moves])[:, :get_model_config(model).n_ctx]
     with torch.no_grad():
         logits, values = model(input_ids=Tensor(mvs_batched).long())
-        logits_kp2 = logits[0, -1].numpy()  # [1, N] # at k+2
-        values_kp2 = values[:, -1].tolist()  # [1, 1]
+        # logits_kp2 = logits[0, -1].numpy()  # [1, N] # at k+2
+        if "cuda" in str(next(model.parameters()).device):
+            logits_kp1 = F.softmax(logits[0, -1, legal_moves], dim = -1).cpu().numpy()
+            values_kp2 = values[:, -1].cpu().tolist()  # [1, 1]
+        else:
+            logits_kp1 = softmax(logits[0, -1, legal_moves].numpy())
+            values_kp2 = values[:, -1].tolist()
     # now for this root_node we have the k+2 depth possible tree, so we add all this to the root_node children
     for prior, state_value_kp2, mv in zip(logits_kp1, values_kp2, legal_moves):
         # the priors are for k+1 and so come from logits_kp1 while the state values come from k+2
@@ -456,9 +471,9 @@ def select_action(n, t=1):
 ####### Self-Play ##############################
 ################################################
 def self_play_one_game(
-        m1, m2, vocab, inv_vocab, game_id, replay_buffer = None,
+        m1, m2, vocab, inv_vocab, game_id, win_col, replay_buffer = None,
         max_moves = 10, depth = 10, sims = 10,
-        verbose = False
+        verbose = False, _trange_moves = True, _trange = False
     ):
     """
     plays one game between two players m1 and m2, assumes m1 = white and m2 = black
@@ -477,7 +492,8 @@ def self_play_one_game(
     col = None
     res = None
     this_game_buffer = []
-    for mid in range(max_moves):
+    pbar = trange(max_moves) if _trange_moves else range(max_moves)
+    for mid in pbar:
         col = "white" if mid % 2 == 0 else "black" # get the player color
         model = m1 if col == "white" else m2 # get the player model
         b = game.board
@@ -489,7 +505,10 @@ def self_play_one_game(
         with torch.no_grad():
             logits, value = model(input_ids = Tensor(moves).view(1, len(moves)).long())
             value = value[0, -1].item()
-            logits = softmax(logits[0, -1, legal_moves].numpy())
+            if "cuda" in str(next(model.parameters()).device):
+                logits = F.softmax(logits[0, -1, legal_moves], dim = -1).cpu().numpy()
+            else:
+                logits = softmax(logits[0, -1, legal_moves].numpy())
         # root_node = Node(state_value = values, move = "[GAME]", p = 0., b = b, color = "white", rc = "white")
         move_str = str(b.move_stack[-1]) if b.move_stack else "[GAME]"
         root_node = Node(
@@ -510,7 +529,7 @@ def self_play_one_game(
         ))
 
         # perform mcts and get the policy distribution
-        mcts(model, root_node, b, depth, vocab, inv_vocab, sims = sims, _trange = False)
+        mcts(model, root_node, b, depth, vocab, inv_vocab, sims = sims, _trange = _trange)
         policy = select_action(root_node, t = 1) # larger temp, more variance
         action = Player.better_choice(legal_moves, policy, n = 1)[0]
         move = Move(inv_vocab[action])
@@ -519,7 +538,7 @@ def self_play_one_game(
         end_value = 0.
         if done:
             verbose_print(f"Game is over at step {mid + 1} and player color {col} --> {res}", verbose = verbose)
-            if res == "win":
+            if res == "win" and win_col == col:
                 end_value = +1.
             break
 

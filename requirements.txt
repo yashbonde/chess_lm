@@ -5,3 +5,5 @@ wget==3.2
 awscli
 wandb==0.10.12
 h5py==3.1.0
+boto3==1.16.44
+elote==0.1.0
