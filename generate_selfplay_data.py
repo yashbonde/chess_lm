@@ -12,6 +12,7 @@ import re
 import os
 import json
 import math
+from sys import version
 import boto3
 import elote
 import pickle
@@ -46,14 +47,15 @@ class SelfPlayTrainer:
         print("Currently the system will only use a GPT-3 style scheduler")
         self.scheduler = None
         self.processed_tokens = 0  # number of tokens processed till now
+        self.ggs = 0  # all the global steps, not just the local ones
 
-    def save_checkpoint(self, ckpt_path = None):
-        raw_model = self.model.module if hasattr(self.model, "module") else self.model
+    def save_checkpoint(self, ckpt_path = None, model = None):
+        raw_model = model.module if hasattr(model, "module") else model
         ckpt_path = ckpt_path if ckpt_path is not None else self.config.ckpt_path
         print(f"Saving Model at {ckpt_path}")
         torch.save(raw_model.state_dict(), ckpt_path)
 
-    def train(self, buffer, model):
+    def train(self, lms, results, model):
         """train a model on the latest data from buffer
         the buffer is a very long list of <BufferMovePoint> objects
         """
@@ -61,13 +63,7 @@ class SelfPlayTrainer:
         config = self.config
         model_config = model.module.config if hasattr(model, "module") else model.config
         # step 1: shape the buffer
-        buffer = np.array([(x.move_id, x.value) for x in buffer])
-        lms, results = buffer[:, 0], buffer[:, 1]
-        # now convert this long list to sequence
-        lms = np.array(lms[:-(len(lms) % model_config.n_ctx)]).reshape(-1, model_config.n_ctx)
-        results = np.array(results[:-(len(results) % model_config.n_ctx)]).reshape(-1, model_config.n_ctx)
-
-        print(lms.shape, results.shape)
+        
         train_data = FullDatasetPreLoaded(lms, results, m2id = None)
         num_batches = len(train_data) // model_config.n_ctx + int(len(train_data) % config.batch_size != 0)
         total_steps = num_batches * config.num_epochs
@@ -82,7 +78,7 @@ class SelfPlayTrainer:
         for gs, d in zip(pbar_train, dl_train):
             # total steps is now the primary iteration method
             d = {k:v.to(self.device) for k,v in d.items()}
-            pbar_train.set_description(f"[TRAIN] GS: {gs}, Loss: {round(train_losses[-1], 5)}, Acc: {train_acc[-1]}")
+            pbar_train.set_description(f"[TRAIN] GGS:{self.ggs}, GS: {gs}, Loss: {round(train_losses[-1], 5)}")
 
             # get model results
             (policy, values, loss) = model(loss=True, **d)
@@ -137,10 +133,15 @@ class SelfPlayTrainer:
                 log_dict.update({"lr": lr})
             # ------------- LR SCHEDULING
 
-            if gs % config.save_every == 0:
-                cp = config.ckpt_path.replace(".pt", f"_{gs}.pt")
-                self.save_checkpoint(cp)
+            if gs and gs % config.save_every == 0:
+                cp = config.ckpt_path.replace(".pt", f"_self_{self.ggs}.pt")
+                self.save_checkpoint(cp, model)
 
+        # training loops end, save final checkpoint file and update ggs
+        self.ggs += gs  # update
+        print("Train End Saving")
+        cp = config.ckpt_path.replace(".pt", f"_self_{self.ggs}.pt")
+        self.save_checkpoint(cp, model)
 
 class SelfPlayTrainerConfig:
     num_epochs = 2
@@ -219,6 +220,7 @@ class SelfPlayManager:
         self._m2.eval()
         self._m1_elo = m1_elo # initial ELO rating
         self._m2_elo = m2_elo # initial ELO rating
+        self.model_config = self._m1.config
 
         if "cuda" in self.device:
             # now paralelize
@@ -234,7 +236,7 @@ class SelfPlayManager:
         self.buffer = []
         self.game_counter = 0 # keeps a counter for all the games played till now
 
-    def upload_run(self):
+    def upload_run(self, upto_idx = None):
         """
         this function first is supposed to pickle the new dump then update the meta of
         the dump.
@@ -250,7 +252,10 @@ class SelfPlayManager:
         fname = f"./dump_{max_game_id+1}_{max_game_id+self.game_counter}.pkl"
         print("Target pickle object:", fname)
         with open(fname, "wb") as pkl_file:
-            pickle.dump(self.buffer, pkl_file)
+            if upto_idx:
+                pickle.dump(self.buffer[:upto_idx], pkl_file)
+            else:
+                pickle.dump(self.buffer, pkl_file)
         tar_fname = fname[:-3] + "tar.gz"
         print("Compressing to:", tar_fname)
         with tarfile.open(tar_fname, "w:gz") as tar:
@@ -260,7 +265,10 @@ class SelfPlayManager:
             print("Demo.. no upload because found envvar LOCAL = True!")
         else:
             BUCKET.upload_file(fname, fname) # local, cloud
-        print(" ... Completed Upload!")
+        print(" ... Completed Upload! Flushing local buffer")
+        if upto_idx is not None:
+            del self.buffer[:upto_idx]
+        # no else because the script is exitng anyways
         print("-"*70)
 
 
@@ -284,6 +292,7 @@ class SelfPlayManager:
         b = elote.EloCompetitor(self._m2_elo)
         rating_a = a.rating
         rating_b = b.rating
+        verbose_print("[BEFORE] Rating A:", self._m1_elo, "Rating B:", self._m2_elo, verbose=self.verbose)
         wins, losts, ties = 10, 4, 6
         if wins > losts:
             a.beat(b)
@@ -295,6 +304,7 @@ class SelfPlayManager:
         rating_change_b = b.rating - rating_b
         self._m1_elo = a.rating
         self._m2_elo = b.rating
+        verbose_print("[AFTER] Rating A:", self._m1_elo, "Rating B:", self._m2_elo, verbose=self.verbose)
         return rating_change_a, rating_change_b
 
     def update_champion_model(self):
@@ -333,8 +343,15 @@ class SelfPlayManager:
                 # step 2 OPTIMISATION: train the model
                 # note that in this approach we always train the second model for convinience
                 # _m1 is champion and _m2 is a contestent this is why always train the
-                # contestent.
-                self.trainer.train(self.buffer, self._m2)
+                # contestent. For this we need to define the lms and results array for
+                # training
+                buffer = np.array([(x.move_id, x.value) for x in self.buffer])
+                lms, results = buffer[:, 0], buffer[:, 1]
+                upto_idx = -(len(lms) % self.model_config.n_ctx)
+                lms = np.array(lms[:upto_idx]).reshape(-1, self.model_config.n_ctx)
+                results = np.array(results[:upto_idx]).reshape(-1, self.model_config.n_ctx)
+                verbose_print("lms:", lms.shape,";Results:", results.shape, verbose = self.verbose)
+                self.trainer.train(lms, results, self._m2)
 
                 # step 3 EVALUAION: evaluate the model with current best model
                 # if the contestent is better than champion
@@ -371,6 +388,9 @@ class SelfPlayManager:
 
                 # calculate the new ELOs
                 m1_change, m2_change = self.update_elo()
+
+                # upload the new datasets and delete local buffer till upto_idx
+                self.upload_run(upto_idx)
                 
         except KeyboardInterrupt:
             print("Found KeyboardInterrupt, stopping training and gameplay collection")
@@ -409,10 +429,10 @@ if __name__ == "__main__":
     args.add_argument("--best_model_path", type=str, required = True, help="path to checkpoint file to best model")
     args.add_argument("--m2id", type=str, default = "assets/moves.json", help="path to move_to_id json")
     args.add_argument("--max_moves", type=int, default = 10, help="number of moves to play in the game")
-    args.add_argument("--depth", type=int, default = 5, help="max tree depth in recursion for MCTS")
-    args.add_argument("--sims", type=int, default = 2, help="number of simulations to perform for each move")
+    args.add_argument("--depth", type=int, default = 2, help="max tree depth in recursion for MCTS")
+    args.add_argument("--sims", type=int, default = 1, help="number of simulations to perform for each move")
     args.add_argument("--buffer_size", type=int, default = 10000, help="total training buffer size")
-    args.add_argument("--n_data_collection_games", type=int, default = 30, help="total games to perform in each training loop for data collection")
+    args.add_argument("--n_data_collection_games", type=int, default = 100, help="total games to perform in each training loop for data collection")
     args.add_argument("--n_evaluation_games", type=int, default = 2, help="number of games for evaluation")
     args = args.parse_args()
 
@@ -453,8 +473,8 @@ if __name__ == "__main__":
         lr=3e-4,
         betas=(0.9, 0.95),
         grad_norm_clip=1.0,
-        ckpt_path=None,
-        save_every=None,
+        ckpt_path=args.best_model_path, # no overrides happen
+        save_every=100,
         scheduler="GPT-3", # default, right now we only support GPT-3 style
         weight_decay=0.1,
         warmup_perc=0.1,
