@@ -15,6 +15,7 @@ import math
 import boto3
 import elote
 import pickle
+import tarfile
 import numpy as np
 from uuid import uuid4
 from tqdm import trange
@@ -32,6 +33,7 @@ from torch.utils.data.dataloader import DataLoader
 BUCKET_NAME = "chess-lm-bucket"
 BUCKET = boto3.resource("s3").Bucket(BUCKET_NAME)
 FILES_ON_AWS = [obj.key for obj in BUCKET.objects.all()]
+LOCAL = bool(float(os.getenv("LOCAL", False)))
 
 class SelfPlayTrainer:
     def __init__(self, config, init_model, device):
@@ -57,12 +59,17 @@ class SelfPlayTrainer:
         """
         model.train()
         config = self.config
-        model_config = model.config
-
+        model_config = model.module.config if hasattr(model, "module") else model.config
         # step 1: shape the buffer
-        lms, results = np.split(np.array([(x.move_id, x.value) for x in buffer]), axis = -1)
+        buffer = np.array([(x.move_id, x.value) for x in buffer])
+        lms, results = buffer[:, 0], buffer[:, 1]
+        # now convert this long list to sequence
+        lms = np.array(lms[:-(len(lms) % model_config.n_ctx)]).reshape(-1, model_config.n_ctx)
+        results = np.array(results[:-(len(results) % model_config.n_ctx)]).reshape(-1, model_config.n_ctx)
+
+        print(lms.shape, results.shape)
         train_data = FullDatasetPreLoaded(lms, results, m2id = None)
-        num_batches = len(train_data) // config.batch_size + int(len(train_data) % config.batch_size != 0)
+        num_batches = len(train_data) // model_config.n_ctx + int(len(train_data) % config.batch_size != 0)
         total_steps = num_batches * config.num_epochs
         pbar_train = trange(total_steps, ncols=100)
         dl_train = DataLoader(dataset=train_data, pin_memory=True, batch_size=config.batch_size, shuffle=train_data.shuffle)
@@ -232,17 +239,29 @@ class SelfPlayManager:
         this function first is supposed to pickle the new dump then update the meta of
         the dump.
         """
+        print("-"*70)
+        print("UPLOADING BUFFER")
+        print("Total Buffer Size:", len(self.buffer))
         gids = [re.findall(r"\d+", x) for x in FILES_ON_AWS if "dump" in x]
         max_game_id = 0
         for g in gids:
             max_game_id = max(max(g), max_game_id)
 
         fname = f"./dump_{max_game_id+1}_{max_game_id+self.game_counter}.pkl"
-        with open(fname, "wb"):
-            pickle.dump(self.buffer)
-        print(f"Uploading buffer ... {fname}", end = "")
-        BUCKET.upload_file(fname, fname) # local, cloud
-        print(" Completed Storing!")
+        print("Target pickle object:", fname)
+        with open(fname, "wb") as pkl_file:
+            pickle.dump(self.buffer, pkl_file)
+        tar_fname = fname[:-3] + "tar.gz"
+        print("Compressing to:", tar_fname)
+        with tarfile.open(tar_fname, "w:gz") as tar:
+            tar.add(fname, arcname=os.path.basename(fname))
+        print(f"Uploading buffer {tar_fname} ...")
+        if LOCAL:
+            print("Demo.. no upload because found envvar LOCAL = True!")
+        else:
+            BUCKET.upload_file(fname, fname) # local, cloud
+        print(" ... Completed Upload!")
+        print("-"*70)
 
 
     def update_elo(self):
@@ -355,7 +374,7 @@ class SelfPlayManager:
                 
         except KeyboardInterrupt:
             print("Found KeyboardInterrupt, stopping training and gameplay collection")
-            self.upload_buffer()
+            self.upload_run()
 
 
 class SelfPlayConfig:
@@ -364,6 +383,7 @@ class SelfPlayConfig:
     sims = None
     buffer_size = None
     n_data_collection_games = None # number of games to play for collection
+    n_evaluation_games = None      # number of games to play for evaluation
 
     def __init__(self, **kwargs):
         self.attrs = ["max_moves", "depth", "sims", "buffer_size",
@@ -389,10 +409,10 @@ if __name__ == "__main__":
     args.add_argument("--best_model_path", type=str, required = True, help="path to checkpoint file to best model")
     args.add_argument("--m2id", type=str, default = "assets/moves.json", help="path to move_to_id json")
     args.add_argument("--max_moves", type=int, default = 10, help="number of moves to play in the game")
-    args.add_argument("--depth", type=int, default = 2, help="max tree depth in recursion for MCTS")
+    args.add_argument("--depth", type=int, default = 5, help="max tree depth in recursion for MCTS")
     args.add_argument("--sims", type=int, default = 2, help="number of simulations to perform for each move")
     args.add_argument("--buffer_size", type=int, default = 10000, help="total training buffer size")
-    args.add_argument("--n_data_collection_games", type=int, default = 10, help="total games to perform in each training loop for data collection")
+    args.add_argument("--n_data_collection_games", type=int, default = 30, help="total games to perform in each training loop for data collection")
     args.add_argument("--n_evaluation_games", type=int, default = 2, help="number of games for evaluation")
     args = args.parse_args()
 
@@ -417,10 +437,12 @@ if __name__ == "__main__":
 
     # config for SelfPlay
     selfplay_config = SelfPlayConfig(
-        max_moves=args.max_moves,
         depth=args.depth,
         sims=args.sims,
         buffer_size=args.buffer_size,
+        max_moves = args.max_moves,
+        n_data_collection_games=args.n_data_collection_games,
+        n_evaluation_games=args.n_evaluation_games,
     )
     print(selfplay_config)
 
@@ -441,6 +463,7 @@ if __name__ == "__main__":
     )
     print(trainer_config)
 
+    # define the manger
     manager = SelfPlayManager(
         config=selfplay_config,
         vocab=vocab,
@@ -450,3 +473,6 @@ if __name__ == "__main__":
         verbose = True
     )
     print(manager)
+
+    # train from the manager
+    manager.start()

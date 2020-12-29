@@ -120,6 +120,14 @@ In the FICS games dataset we get the following distributions:
 
 Get the complete moves distributions in this [file](assest/../assets/dist.txt).
 
+### Self Play Data
+
+Self play is done to collect more data than available and use the updated models to keep increasing the quality of training data. Once you have atleast one model ready you can start to use that to create a dataset. The pipeline is designed to pickle the buffer, .tar.gz zip it and upload to AWS. Now for your usecase you will have to update the script `generate_selfplay_data.py`. If you do not want to upload the data just want to test the script add LOCAL=1 environment variable:
+```
+$ python3 generate_selfplay_data.py --best_model_path models/useful/winter-sweep-5/cgpt_27000.pt
+$ LOCAL=1 python3 generate_selfplay_data.py --best_model_path models/useful/winter-sweep-5/cgpt_27000.pt
+```
+
 ## Training
 
 The if you have unzipped in same level as this repo then training is straightforward, run the command
@@ -174,6 +182,9 @@ How do we find out whether the model is learning or not. Often during the gamepl
 I need to come up with good metrics!
 
 ## Updates
+
+- **29/12/2020** Some more updates:
+  - Self play pipeline for pickling-zipping-uploading complete. Read instruction for run above.
 
 - **25/12/2020** Some more updates:
   - Trained a massive 100-model zoo using Weights & Biases Sweep functionality. Models now regularly hit as low as 0.73 on value loss.
