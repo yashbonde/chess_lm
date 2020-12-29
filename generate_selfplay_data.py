@@ -319,10 +319,18 @@ class SelfPlayManager:
             while True:
                 # step 1 COLLECTION: collect data by playing a tonne of games with self
                 verbose_print("Perform data collection by self play", verbose=self.verbose)
-                for _ in trange(config.n_data_collection_games):
+                pbar = trange(config.n_data_collection_games)
+                for i in pbar:
+                    # 50 % of the games are played with white as winning color
+                    # and rest with black as winning color
+                    m1 = self._m1 if i % 2 == 0 else self._m2
+                    m2 = self._m2 if i % 2 == 0 else self._m1
+                    win_col = "black" if i % 2 == 0 else "white" # color for m2
+                    pbar.set_description(f"[SELF PLAY] win color: {win_col}")
                     _, _, moves = self_play_one_game(
-                        m1=self._m1,
-                        m2=self._m2,
+                        m1=m1,
+                        m2=m2,
+                        win_col=win_col,
                         game_id=self.game_counter,
                         vocab=self.vocab,
                         inv_vocab=self.inv_vocab,
@@ -364,11 +372,12 @@ class SelfPlayManager:
                     # in 50% of the games are played as white and 50% as black
                     m1 = self._m1 if i % 2 == 0 else self._m2
                     m2 = self._m2 if i % 2 == 0 else self._m1
-                    win_col = "white" if i % 2 == 0 else "black"
+                    win_col = "black" if i % 2 == 0 else "white" # color for m2
                     pbar.set_description(f"[EVLUATION] win color: {win_col}")
                     col, res, _ = self_play_one_game(
                         m1=m1,
                         m2=m2,
+                        win_col=win_col,
                         game_id=self.game_counter,
                         vocab=self.vocab,
                         inv_vocab=self.inv_vocab,
@@ -434,8 +443,8 @@ if __name__ == "__main__":
     args.add_argument("--best_model_path", type=str, required = True, help="path to checkpoint file to best model")
     args.add_argument("--m2id", type=str, default = "assets/moves.json", help="path to move_to_id json")
     args.add_argument("--max_moves", type=int, default = 100, help="number of moves to play in the game")
-    args.add_argument("--depth", type=int, default = 10, help="max tree depth in recursion for MCTS")
-    args.add_argument("--sims", type=int, default = 10, help="number of simulations to perform for each move")
+    args.add_argument("--depth", type=int, default = 5, help="max tree depth in recursion for MCTS")
+    args.add_argument("--sims", type=int, default = 100, help="number of simulations to perform for each move")
     args.add_argument("--buffer_size", type=int, default = int(1e9), help="total training buffer size")
     args.add_argument("--n_data_collection_games", type=int, default = 100, help="total games to perform in each training loop for data collection")
     args.add_argument("--n_evaluation_games", type=int, default = 4, help="number of games for evaluation")

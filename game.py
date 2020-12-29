@@ -494,7 +494,8 @@ def self_play_one_game(
     this_game_buffer = []
     pbar = trange(max_moves) if _trange_moves else range(max_moves)
     for mid in pbar:
-        col = "white" if mid % 2 == 0 else "black" # get the player color
+        # get player color, first step is always white and then rest of the moves are alternate
+        col = "white" if (mid == 0) or ((mid + 1) % 2 == 0) else "black"
         model = m1 if col == "white" else m2 # get the player model
         b = game.board
         verbose_print(b.fen(), verbose = verbose)
@@ -538,8 +539,10 @@ def self_play_one_game(
         end_value = 0.
         if done:
             verbose_print(f"Game is over at step {mid + 1} and player color {col} --> {res}", verbose = verbose)
-            if res == "win" and win_col == col:
+            if res == "win" and win_col == col: # when winning color is same as learning model
                 end_value = +1.
+            elif res == "win" and win_col != col: # when winning color is opp to learning model
+                end_value = -1.
             break
 
     # add the last move taken in the buffer
@@ -548,6 +551,7 @@ def self_play_one_game(
         value = end_value,
         game_id=game_id
     ))
+    print("-"*10, end_value)
 
     if replay_buffer is not None:
         replay_buffer.extend(this_game_buffer)
