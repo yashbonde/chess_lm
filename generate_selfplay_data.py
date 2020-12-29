@@ -63,11 +63,10 @@ class SelfPlayTrainer:
         config = self.config
         model_config = model.module.config if hasattr(model, "module") else model.config
         # step 1: shape the buffer
-        
         train_data = FullDatasetPreLoaded(lms, results, m2id = None)
         num_batches = len(train_data) // model_config.n_ctx + int(len(train_data) % config.batch_size != 0)
-        total_steps = num_batches * config.num_epochs
-        pbar_train = trange(total_steps, ncols=100)
+        print(len(train_data), num_batches)
+        pbar_train = trange(num_batches, ncols=100)
         dl_train = DataLoader(dataset=train_data, pin_memory=True, batch_size=config.batch_size, shuffle=train_data.shuffle)
         prev_train_loss = 100000 # what was the training loss in previous testing cycle
         no_loss_steps = 0 # no of steps since there was devrease in the loss
@@ -272,7 +271,7 @@ class SelfPlayManager:
         print("-"*70)
 
 
-    def update_elo(self):
+    def update_elo(self, wins, draw, losts):
         # we are using BayesElo as proposed here and used in Alpha/Mu Zero for Chess
         # and Shogi. Read more about it here:
         # https://www.remi-coulom.fr/Bayesian-Elo/
@@ -293,7 +292,7 @@ class SelfPlayManager:
         rating_a = a.rating
         rating_b = b.rating
         verbose_print("[BEFORE] Rating A:", self._m1_elo, "Rating B:", self._m2_elo, verbose=self.verbose)
-        wins, losts, ties = 10, 4, 6
+        verbose_print(f"wins: {wins}; draw: {draw}; losts: {losts}", verbose=self.verbose)
         if wins > losts:
             a.beat(b)
         elif losts > wins:
@@ -359,11 +358,13 @@ class SelfPlayManager:
                 self._m2.eval()
                 new_model_win = 0
                 num_draws = 0
-                for i in trange(config.n_evaluation_games):
+                pbar = trange(config.n_evaluation_games)
+                for i in pbar:
                     # in 50% of the games are played as white and 50% as black
                     m1 = self._m1 if i % 2 == 0 else self._m2
                     m2 = self._m2 if i % 2 == 0 else self._m1
                     win_col = "white" if i % 2 == 0 else "black"
+                    pbar.set_description(f"[EVLUATION] win color: {win_col}")
                     col, res, _ = self_play_one_game(
                         m1=m1,
                         m2=m2,
@@ -378,16 +379,18 @@ class SelfPlayManager:
                     if res == "win" and col == win_col:
                         # new model won
                         new_model_win += 1
-                    elif res == "draw":
+                    elif res in ["draw", "game"]:
+                        # either the game was draw or did not finish
                         num_draws += 1
                 
+                new_model_lost = config.n_evaluation_games - num_draws - new_model_win
                 s = new_model_win / config.n_evaluation_games
                 verbose_print("Score:", s, verbose=self.verbose)
                 if s >= 0.55:
                     self.update_champion_model()
 
                 # calculate the new ELOs
-                m1_change, m2_change = self.update_elo()
+                m1_change, m2_change = self.update_elo(new_model_win, num_draws, new_model_lost)
 
                 # upload the new datasets and delete local buffer till upto_idx
                 self.upload_run(upto_idx)
@@ -429,11 +432,11 @@ if __name__ == "__main__":
     args.add_argument("--best_model_path", type=str, required = True, help="path to checkpoint file to best model")
     args.add_argument("--m2id", type=str, default = "assets/moves.json", help="path to move_to_id json")
     args.add_argument("--max_moves", type=int, default = 10, help="number of moves to play in the game")
-    args.add_argument("--depth", type=int, default = 2, help="max tree depth in recursion for MCTS")
+    args.add_argument("--depth", type=int, default = 5, help="max tree depth in recursion for MCTS")
     args.add_argument("--sims", type=int, default = 1, help="number of simulations to perform for each move")
     args.add_argument("--buffer_size", type=int, default = 10000, help="total training buffer size")
     args.add_argument("--n_data_collection_games", type=int, default = 100, help="total games to perform in each training loop for data collection")
-    args.add_argument("--n_evaluation_games", type=int, default = 2, help="number of games for evaluation")
+    args.add_argument("--n_evaluation_games", type=int, default = 4, help="number of games for evaluation")
     args = args.parse_args()
 
     # load vocab

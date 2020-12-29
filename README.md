@@ -33,16 +33,7 @@ Note that the game did not turn out to be like that, infact both the models play
 
 This is the task list:
 
-- [ ] Complete automation of tournament generation. Is there some way to define "whats going on?"
-  - Add code for creating metric graphs.
-- [ ] Integrate code with a web interface on [chessshhh](https://github.com/yashbonde/chessshhh)
-  - Port code for server
-    - There's this CORS for API and static file code is not being read correctly. Someone else has to fix those.
-- [ ] Add more complicated search algorithm MCTS
-  - ~~Basic version of MCTS included~~
-  - ~~Fix the bugs in MCTS basic~~ :P
-  - Batching to improve speeds?
-
+- [ ] Cloud run for self play data collection
 
 ## Player
 
