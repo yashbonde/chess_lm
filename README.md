@@ -33,7 +33,10 @@ Note that the game did not turn out to be like that, infact both the models play
 
 This is the task list:
 
-- [ ] Cloud run for self play data collection
+- Cloud run for self play data collection
+  - Build a distributed system for data collection, the sequential method takes a lot of time
+  - Is is possible to build multiple servers for self play and some for training
+  - Is it possible to parallelize the process to use each GPU to it's maximum efficiency
 
 ## Player
 

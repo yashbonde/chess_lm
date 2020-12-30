@@ -5,7 +5,7 @@ import json
 from flask import request, make_response, render_template, Flask, jsonify
 
 from game import Player, RandomPlayer, GameEngine, Move
-from model import BaseHFGPT, ModelConfig
+from model import BaseHFGPT, ModelConfig, BetaChess
 
 # make the app and run the server
 app = Flask(__name__)
@@ -18,20 +18,20 @@ with open("assets/moves.json") as f:
     vocab_size = len(json.load(f))
 config = ModelConfig(
     vocab_size=vocab_size,
-    n_positions=180,
-    n_ctx=180,
+    n_positions=170,
+    n_ctx=170,
     n_embd=128,
-    n_layer=30,
+    n_layer=8,
     n_head=8,
-    loss_method = "ce"
+    loss_method = "mse"
 )
 player = Player(
     config,
-    "models/useful/q1/q1_15000.pt",
+    "models/useful/splendid-donkey-197/cgpt_38401.pt",
     "assets/moves.json",
     search="sample",
     depth=2,
-    model_class=BaseHFGPT
+    model_class=BetaChess
 )
 
 @app.route('/move')
@@ -54,8 +54,14 @@ def make_move():
 
     # player makes the move and board gets updated
     move, _, _ = player.move(game)
-    game.step(move)
+    done, res = game.step(move)
+    print("move", move, game.board.fen())
     move = str(move)
+
+    if done:
+        res == "You Lose Sucker" if res == "win" else "Game Draw"
+        response = make_response(jsonify(content=res))
+        return response
 
     # response
     response = make_response(jsonify(
