@@ -353,30 +353,31 @@ def minimax(node, depth, _max=False):
 def expand_tree(model, root_node, b, depth, vocab, inv_vocab, nodes_taken):
     mvs = get_mv_ids(b, vocab)[:get_model_config(model).n_ctx] # whatever has been played till now
     legal_moves = [vocab[str(x)[:4]] for x in b.legal_moves]
+    _CUDA = "cuda" in str(next(model.parameters()).device)
 
     # step 1: for this root node I need to determine what are the probabilities of next move
     with torch.no_grad():
-        logits, values = model(input_ids=Tensor(mvs).view(1, len(mvs)).long())
-        values_kp1 = values[0, -1].item()  # [1, 1]
-
         # before we were directly using the CPU version now we perform softmax on GPU
         # logits_kp1 = logits[0, -1].numpy()  # [1, N]
         # logits_kp1 = softmax(logits_kp1[legal_moves])
-        if "cuda" in str(next(model.parameters()).device):
+        if _CUDA:
+            logits, values = model(input_ids=Tensor(mvs).view(1, len(mvs)).long().to("cuda:0"))
             logits = F.softmax(logits[0, -1, legal_moves], dim = -1).cpu().numpy()
         else:
+            logits, values = model(input_ids=Tensor(mvs).view(1, len(mvs)).long())
             logits = softmax(logits[0, -1, legal_moves].numpy())
 
     # EXPANSION
     # step 2: for all the next legal moves what are the probabilities and next board states
     mvs_batched = np.asarray([[*mvs] + [l] for l in legal_moves])[:, :get_model_config(model).n_ctx]
     with torch.no_grad():
-        logits, values = model(input_ids=Tensor(mvs_batched).long())
         # logits_kp2 = logits[0, -1].numpy()  # [1, N] # at k+2
-        if "cuda" in str(next(model.parameters()).device):
+        if _CUDA:
+            logits, values = model(input_ids=Tensor(mvs_batched).long().to("cuda:0"))
             logits_kp1 = F.softmax(logits[0, -1, legal_moves], dim = -1).cpu().numpy()
             values_kp2 = values[:, -1].cpu().tolist()  # [1, 1]
         else:
+            logits, values = model(input_ids=Tensor(mvs_batched).long())
             logits_kp1 = softmax(logits[0, -1, legal_moves].numpy())
             values_kp2 = values[:, -1].tolist()
     # now for this root_node we have the k+2 depth possible tree, so we add all this to the root_node children
@@ -493,6 +494,7 @@ def self_play_one_game(
     res = None
     this_game_buffer = []
     pbar = trange(max_moves) if _trange_moves else range(max_moves)
+    _CUDA = "cuda" in str(next(model.parameters()).device)
     for mid in pbar:
         # get player color, first step is always white and then rest of the moves are alternate
         col = "white" if (mid == 0) or ((mid + 1) % 2 == 0) else "black"
@@ -504,12 +506,13 @@ def self_play_one_game(
         legal_moves = [vocab[str(x)[:4]] for x in b.legal_moves]
         moves = get_mv_ids(b, vocab)
         with torch.no_grad():
-            logits, value = model(input_ids = Tensor(moves).view(1, len(moves)).long())
-            value = value[0, -1].item()
-            if "cuda" in str(next(model.parameters()).device):
+            if _CUDA:
+                logits, value = model(input_ids = Tensor(moves).view(1, len(moves)).long().to("cuda:0"))
                 logits = F.softmax(logits[0, -1, legal_moves], dim = -1).cpu().numpy()
             else:
+                logits, value = model(input_ids = Tensor(moves).view(1, len(moves)).long())
                 logits = softmax(logits[0, -1, legal_moves].numpy())
+            value = value[0, -1].item()
         # root_node = Node(state_value = values, move = "[GAME]", p = 0., b = b, color = "white", rc = "white")
         move_str = str(b.move_stack[-1]) if b.move_stack else "[GAME]"
         root_node = Node(
@@ -551,7 +554,7 @@ def self_play_one_game(
         value = end_value,
         game_id=game_id
     ))
-    print("-"*10, end_value)
+    verbose_print("-"*10, end_value, verbose = verbose)
 
     if replay_buffer is not None:
         replay_buffer.extend(this_game_buffer)
