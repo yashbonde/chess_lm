@@ -474,7 +474,8 @@ def select_action(n, t=1):
 def self_play_one_game(
         m1, m2, vocab, inv_vocab, game_id, win_col, replay_buffer = None,
         max_moves = 10, depth = 10, sims = 10,
-        verbose = False, _trange_moves = True, _trange = False
+        verbose = False, _trange_moves = True, _trange = False,
+        _CUDA = False
     ):
     """
     plays one game between two players m1 and m2, assumes m1 = white and m2 = black
@@ -494,7 +495,6 @@ def self_play_one_game(
     res = None
     this_game_buffer = []
     pbar = trange(max_moves) if _trange_moves else range(max_moves)
-    _CUDA = "cuda" in str(next(model.parameters()).device)
     for mid in pbar:
         # get player color, first step is always white and then rest of the moves are alternate
         col = "white" if (mid == 0) or ((mid + 1) % 2 == 0) else "black"

@@ -338,7 +338,8 @@ class SelfPlayManager:
                         max_moves=config.max_moves,
                         depth=config.depth,
                         sims=config.sims,
-                        _trange_moves=self.verbose
+                        _trange_moves=self.verbose,
+                        _CUDA="cuda" in self.device
                     )
                     self.game_counter += 1
                     self.buffer.extend(moves)
@@ -385,7 +386,8 @@ class SelfPlayManager:
                         max_moves=config.max_moves,
                         depth=config.depth,
                         sims=config.sims,
-                        _trange=self.verbose
+                        _trange=self.verbose,
+                        _CUDA="cuda" in self.device
                     )
                     if res == "win" and col == win_col:
                         # new model won
@@ -441,6 +443,7 @@ if __name__ == "__main__":
         "file and update BUCKET_NAME. Happy Hunting!"
     )
     args.add_argument("--best_model_path", type=str, required = True, help="path to checkpoint file to best model")
+    args.add_argument("--arch", type=str, choices=["tiny", "medium"], default = "tiny", help="architecture")
     args.add_argument("--m2id", type=str, default = "assets/moves.json", help="path to move_to_id json")
     args.add_argument("--max_moves", type=int, default = 100, help="number of moves to play in the game")
     args.add_argument("--depth", type=int, default = 5, help="max tree depth in recursion for MCTS")
@@ -455,14 +458,22 @@ if __name__ == "__main__":
         vocab = json.load(f)
         inv_vocab = {v:k for k,v in vocab.items()}
 
-    # best model architecture configuration till 26.12.2020
+    if argts.arch == "tiny":
+        n_embd = 128
+        n_layer = 8
+        n_head = 8
+    else: # medium
+        n_embd = 200
+        n_layer = 10
+        n_head = 10
+
     best_model_config = ModelConfig(
         vocab_size=len(vocab),
         n_positions=85*2,
         n_ctx=85*2,
-        n_embd=200,
-        n_layer=10,
-        n_head=20,
+        n_embd=n_embd,
+        n_layer=n_layer,
+        n_head=n_head,
         loss_method="mse", # simple regression head
         vocab_path = args.m2id,
         model_path = args.best_model_path
