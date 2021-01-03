@@ -86,7 +86,7 @@ def parse_and_save_data(files, save_after, pid):
                 
                 cntr += 1 # update main counter
                 result = cg.headers["Result"]
-                if result is not "*":
+                if result != "*":
                     seq = [m2id[str(x.move)[:4]] for x in cg.mainline() if str(x.move)[:4] in m2id]
                     seqs.append(' '.join(list(map(str, seq))))
                     rseq.append(results[result])
@@ -147,9 +147,30 @@ def multiprocessing_parsing_wrapper(files, save_after):
         p.join()
 
 
-# ----------------------------------------------- #
+def print_help():
+    h = '''
+Chess LM sata preparation script. Many things in this script are
+    hardcoded and you might need to open it and change those.
+Usage: download.py [-hdpmc] [options]
+-h     : Display this help and exit
+-d     : Download the data from assets/links2000.txt file
+         Extract the ZIP files and dumps them in data/ folder
+-p     : Parse the .pgn files in data/ folder using multprocessing
+         default workers set at 20. After parsing process for each
+         worker you wil get a .txt file with the move ids
+-m     : Merges all the parsed files to a single giant txt file
+-c m f : Compiles the merge txt file to a big dataset. Takes
+         following arguments:
+         - <m:int> maximum length for each game
+         - <f:str ["npz","hdf5"]> format to store data in
+'''.strip()
+    print(h)
 
-if sys.argv[1] == "-d":
+# ----------------------------------------------- #
+if sys.argv[1] == "-h":
+    print_help()
+
+elif sys.argv[1] == "-d":
     # download files and unzip
     links = open('assets/links2000.txt').readlines()
     os.makedirs("data/", exist_ok = True)
@@ -289,7 +310,8 @@ elif sys.argv[1] == "-c":
         print("Saving Numpy zip at data/clm.npz")
         np.savez("data/clm.npz", lms=lms, res=results)
 
-
+else:
+    print_help()
 
 # ----------------------------------------------- #
 

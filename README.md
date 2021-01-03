@@ -20,30 +20,42 @@ To see a random gameplay between two AI agents ("AI goes brrrr....") run `python
 
 <img src="assets/loss_is_correct.png">
 
-## It Learns!...?
+<!-- ## It Learns!...?
 
 Somehow there are signs that it is infact good at predicting the value of the board, if not at the policy.
 Consider this simple game where two networks with the same weights were playing against one another. One used the minimax tree searching, while the other was using sampling.
 
 <img src="assets/self-play1.png">
 
-Note that the game did not turn out to be like that, infact both the models play (policy) very stupidly. However they do correctly understand the state of the board and balck better than white because of that depth search. This used a `z5` model (old).
+Note that the game did not turn out to be like that, infact both the models play (policy) very stupidly. However they do correctly understand the state of the board and balck better than white because of that depth search. This used a `z5` model (old). -->
+ ### Notes on LeelaChessZero
+
+[LC0](https://lczero.org/) is a public opensource version of alpha zero with aim to create strong chess AIs. It is a good source of inspiration and data from large number of selfplay games. The people who wrote that code are brialliant people,  This section has notes on it that I found interesting:
+
+- In my code I tried to use softmax 3 head for value prediction, LC0 also does the same thing and calls it WDL Head. If `wdl` is set to true you can see the value as `value_head = Softmax(scope, ip_fc);` else the value is given as `value_head = Tanh(scope, ip_fc);`. This code is from [this](https://github.com/LeelaChessZero/lc0/blob/master/src/neural/network_tf_cc.cc) file line 190-213.
+- To understand more for what happens during the training you will need to go to a different repo called [lczero-training](https://github.com/LeelaChessZero/lczero-training). An example of policy target is `[0, 0, +1, 0, -1, -1, -1]` where +1 is target move and -1 is the masking for illegal moves, thus there is a function to mask illegal moves before sending to loss. This is by default not enabled, however it works like this ([file](https://github.com/LeelaChessZero/lczero-training/blob/master/tf/tfprocess.py)):
+```
+move_is_legal = tf.greater_equal(target, 0)
+illegal_filler = tf.zeros_like(output) - 1.0e10
+output = tf.where(move_is_legal, output, illegal_filler)
+```
+- 
 
 ## Todo
 
 This is the task list:
 
-- Cloud run for self play data collection
-  - Build a distributed system for data collection, the sequential method takes a lot of time
-  - Is is possible to build multiple servers for self play and some for training
-  - Is it possible to parallelize the process to use each GPU to it's maximum efficiency
+- Write code for parsing lc0 selfplay datasets
+- Write code for creating illegal move masks for training as well. This will not be back ported to current AWS stored zip.
+- Code for playing with lc0.
+  - Note that lc0 uses C++ as its default language making it immensely powerful, so should I use the same code I have in python and simply load weights in a pytorch module. Or go the other way and port everything in this code to C++?
+  - Or do I even need this, instead I can just do a tonne of matches with itself and calculate the ELO from self-play?
 
 ## Player
 
 The way to evaluate the model is to make it into a player and run it. To make a player do the following:
 ```python
 from game import GameEngine, Player
-
 with open("assets/moves.json") as f:
     vocab_size = len(json.load(f))
 

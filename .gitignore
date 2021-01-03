@@ -137,3 +137,4 @@ wandb/
 *.tar.gz
 *.pkl
 *.p
+leela_things/

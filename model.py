@@ -5,7 +5,6 @@ import json
 import time
 import math
 import wandb
-wandb.init(project="blindfold-chess")
 import random
 import numpy as np
 from tqdm import trange
@@ -356,12 +355,8 @@ class Trainer:
         num_batches = len(train_data) // config.batch_size + int(len(train_data) % config.batch_size != 0)
         total_steps = num_batches * config.num_epochs
 
-        # we don't need to send all the hyper-parameters to wandb so instead we create a new dict
-        hyperparameters = {
-            "warmup_perc": config.warmup_perc,
-            "scheduler": config.scheduler,
-        }
-        wandb.init(config=hyperparameters)  # add all the configurations
+        # initialise wandb here, initially it was init at import and that meant it ran all the time
+        wandb.init(project="blindfold-chess")
         wandb.watch(model)
 
         # create step functions
@@ -447,181 +442,167 @@ class Trainer:
             scheduler = None
         print("Train Data Size:", len(train_data), "; Test Data Size:", len(test_data), "; Scheduler:", scheduler)
 
-        with SummaryWriter(log_dir=config.tb_path, flush_secs=20) as tb:
-            # this is second method for creating a training loop
-            pbar_train = trange(total_steps, ncols=100)
-            dl_train = DataLoader(dataset=train_data, pin_memory=True, batch_size=config.batch_size, shuffle=train_data.shuffle)
-            prev_train_loss = 100000 # what was the training loss in previous testing cycle
-            no_loss_steps = 0 # no of steps since there was devrease in the loss
-            processed_tokens = 0 # number of tokens processed till now
-            break_training = False
-            train_losses = [-1]
-            train_acc = [-1]
-            model.train()
+        # this is second method for creating a training loop
+        pbar_train = trange(total_steps, ncols=100)
+        dl_train = DataLoader(dataset=train_data, pin_memory=True, batch_size=config.batch_size, shuffle=train_data.shuffle)
+        prev_train_loss = 100000 # what was the training loss in previous testing cycle
+        no_loss_steps = 0 # no of steps since there was devrease in the loss
+        processed_tokens = 0 # number of tokens processed till now
+        break_training = False
+        train_losses = [-1]
+        train_acc = [-1]
+        model.train()
 
-            for gs, d in zip(pbar_train, dl_train):
-                # total steps is now the primary iteration method
-                d = {k:v.to(self.device) for k,v in d.items()}
-                pbar_train.set_description(f"[TRAIN] GS: {gs}, Loss: {round(train_losses[-1], 5)}, Acc: {train_acc[-1]}")
+        for gs, d in zip(pbar_train, dl_train):
+            # total steps is now the primary iteration method
+            d = {k:v.to(self.device) for k,v in d.items()}
+            pbar_train.set_description(f"[TRAIN] GS: {gs}, Loss: {round(train_losses[-1], 5)}, Acc: {train_acc[-1]}")
 
-                # get model results
-                (policy, values, loss) = model(loss=True, **d)
-                loss_total = loss[0].mean() # gather
-                if not isinstance(loss[1], int):
-                    loss_policy = loss[1].mean().item() # gather
+            # get model results
+            (policy, values, loss) = model(loss=True, **d)
+            loss_total = loss[0].mean() # gather
+            if not isinstance(loss[1], int):
+                loss_policy = loss[1].mean().item() # gather
+            else:
+                loss_policy = -1
+            loss_value = loss[2].mean().item()  # gather
+            train_losses.append(loss_total.item())
+
+            # calculate move accuracy
+            move_acc = 0
+            if policy is not None:
+                policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
+                policy = torch.argmax(policy, dim=-1)
+                targets = d["input_ids"][:, 1:].contiguous().view(-1)
+                move_acc = sum(targets == policy).item()
+                move_acc /= targets.size(0)
+                train_acc.append(move_acc)
+
+            log_dict = {
+                "loss_total": loss_total,
+                "loss_policy": loss_policy,
+                "loss_value": loss_value,
+                "move_acc": move_acc
+            }
+
+            # calculate mse error if softmax activation used
+            if model_config.loss_method == "ce":
+                values = F.softmax(values[:, :-1, :], dim=-1).contiguous().view(-1, 3)  # [B, N, 3]
+                values = values.matmul(torch.Tensor([-1, 0, 1]).to(d["value_targets"].device).float())
+                mse = (values - d["value_targets"][:,1:].contiguous().view(-1)) ** 2
+                log_dict.update({"regression_loss": mse.mean().item()})
+
+            if scheduler is not None and scheduler != "GPT3":
+                last_lr = scheduler.get_last_lr()[0]
+                log_dict.update({"lr": last_lr})
+
+            # backprop
+            loss_total.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
+            optimizer.step()
+            if scheduler is not None and scheduler != "GPT3":
+                scheduler.step()
+
+            # ------------- LR SCHEDULING
+            elif scheduler == "GPT3":
+                # update learning rate
+                processed_tokens += d["input_ids"].size(0) * model_config.n_ctx # batch_size * number of tokens in each sequence
+                if processed_tokens < config.warmup_tokens:
+                    # linear warmup
+                    lr_mult = float(processed_tokens) / float(max(1, config.warmup_tokens))
                 else:
-                    loss_policy = -1
-                loss_value = loss[2].mean().item()  # gather
-                train_losses.append(loss_total.item())
+                    # cosine learning rate decay
+                    progress = float(processed_tokens - config.warmup_tokens) / float(max(1, config.final_tokens - config.warmup_tokens))
+                    lr_mult = max(0.1, 0.5 * (1.0 + math.cos(math.pi * progress)))
+                lr = config.lr * lr_mult
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = lr
+                log_dict.update({"lr": lr})
+            # ------------- LR SCHEDULING
 
-                # calculate move accuracy
-                move_acc = 0
-                if policy is not None:
-                    policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
-                    policy = torch.argmax(policy, dim=-1)
-                    targets = d["input_ids"][:, 1:].contiguous().view(-1)
-                    move_acc = sum(targets == policy).item()
-                    move_acc /= targets.size(0)
-                    train_acc.append(move_acc)
+            # test if time has come
+            if gs > 0 and gs % config.test_every == 0:
+                model.eval()
+                dl_test = DataLoader(
+                    dataset = test_data, pin_memory = True, batch_size = config.batch_size, shuffle=test_data.shuffle
+                )
 
-                # # add to tensorboard
-                # tb.add_scalar("train/loss_total", loss_total.item(), global_step=gs, walltime=time.time())
-                # tb.add_scalar("train/loss_policy", loss_policy.item(), global_step=gs, walltime=time.time())
-                # tb.add_scalar("train/loss_value", loss_value.item(), global_step=gs, walltime=time.time())
-                # tb.add_scalar("train/move_acc", move_acc, global_step=gs, walltime=time.time())
-                log_dict = {
-                    "loss_total": loss_total,
-                    "loss_policy": loss_policy,
-                    "loss_value": loss_value,
-                    "move_acc": move_acc
-                }
+                num_batches = len(test_data) // config.batch_size + int(len(test_data) % config.batch_size != 0)
 
-                # calculate mse error if softmax activation used
+                test_losses = []
+                test_acc = []
+                test_loss_value = []
+                pbar_test = trange(num_batches, ncols = 100)
+                for it, d in zip(pbar_test, dl_test):
+                    d = {k:v.to(self.device) for k,v in d.items()}
+                    pbar_test.set_description(f"[VAL] Global ({gs}) -> [{it + 1}/{num_batches}]")
+
+                    with torch.no_grad():
+                        # get model results
+                        (policy, values, loss) = model(loss=True, **d)
+                        loss_total = loss[0].mean().item()  # gather
+                        if not isinstance(loss[1], int):
+                            loss_policy = loss[1].mean().item()  # gather
+                        else:
+                            loss_policy = -1
+                        loss_value = loss[2].mean().item()  # gather
+                        test_losses.append([loss_total])
+                        test_loss_value.append([loss_value])
+
+                        # calculate move accuracy
+                        move_acc = 0
+                        if policy is not None:
+                            policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
+                            policy = torch.argmax(policy, dim=-1)
+                            targets = d["input_ids"][:, 1:].contiguous().view(-1)
+                            move_acc = sum(targets == policy).item()
+                            move_acc /= targets.size(0)
+                            test_acc.append(move_acc)
+
+                        if model_config.loss_method == "ce":
+                            values = F.softmax(values[:, :-1, :], dim=-1).contiguous().view(-1, 3)  # [B, N, 3]
+                            values = values.matmul(torch.Tensor([-1, 0, 1]).to(d["value_targets"].device).float())
+                            mse = (values - d["value_targets"][:,1:].contiguous().view(-1)) ** 2
+                            test_losses[-1].append(mse.mean().item())
+
+                # now testing is complete so see the results, save or stop if needed
+                test_losses = np.array(test_losses)
+                losses = np.mean(test_losses[:, 0])
+                test_acc = np.mean(test_acc)
+                print(f"Loss: {losses:.3f}; Acc: {test_acc:.3f}", end = " ")
+                log_dict.update({
+                    "test_loss": losses,
+                    "test_acc": test_acc
+                })
                 if model_config.loss_method == "ce":
-                    values = F.softmax(values[:, :-1, :], dim=-1).contiguous().view(-1, 3)  # [B, N, 3]
-                    values = values.matmul(torch.Tensor([-1, 0, 1]).to(d["value_targets"].device).float())
-                    mse = (values - d["value_targets"][:,1:].contiguous().view(-1)) ** 2
-                    log_dict.update({"regression_loss": mse.mean().item()})
+                    log_dict.update({"test_regression_loss": np.mean(test_losses[:, 1])})
+                else:
+                    log_dict.update({"test_value_loss": np.mean(test_loss_value)})
 
+                if prev_train_loss > losses:
+                    prev_train_loss = losses
+                    no_loss_steps = 0
+                    print("... previous loss was larger, updating values")
+                    cp = config.ckpt_path.replace(".pt", f"_{gs}.pt")
+                    self.save_checkpoint(cp)
+                else:
+                    no_loss_steps += 1
+                    print(f"... previous loss was smaller. No improvements for past {no_loss_steps} evaluations")
 
-                if scheduler is not None and scheduler != "GPT3":
-                    last_lr = scheduler.get_last_lr()[0]
-                    tb.add_scalar("train/lr", last_lr, global_step=gs, walltime=time.time())
-                    log_dict.update({"lr": last_lr})
+                if config.patience != -1 and  no_loss_steps == config.patience:
+                    break_training = True
 
-                # backprop
-                loss_total.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
-                optimizer.step()
-                if scheduler is not None and scheduler != "GPT3":
-                    scheduler.step()
+                model.train()
 
-                # ------------- LR SCHEDULING
-                elif scheduler == "GPT3":
-                    # update learning rate
-                    processed_tokens += d["input_ids"].size(0) * model_config.n_ctx # batch_size * number of tokens in each sequence
-                    if processed_tokens < config.warmup_tokens:
-                        # linear warmup
-                        lr_mult = float(processed_tokens) / float(max(1, config.warmup_tokens))
-                    else:
-                        # cosine learning rate decay
-                        progress = float(processed_tokens - config.warmup_tokens) / float(max(1, config.final_tokens - config.warmup_tokens))
-                        lr_mult = max(0.1, 0.5 * (1.0 + math.cos(math.pi * progress)))
-                    lr = config.lr * lr_mult
-                    for param_group in optimizer.param_groups:
-                        param_group['lr'] = lr
-                    log_dict.update({"lr": lr})
-                # ------------- LR SCHEDULING
+            wandb.log(log_dict)
+            if break_training:
+                print("Stopping training")
+                break
 
-                # test if time has come
-                if gs > 0 and gs % config.test_every == 0:
-                    model.eval()
-                    dl_test = DataLoader(
-                        dataset = test_data, pin_memory = True, batch_size = config.batch_size, shuffle=test_data.shuffle
-                    )
-
-                    num_batches = len(test_data) // config.batch_size + int(len(test_data) % config.batch_size != 0)
-
-                    test_losses = []
-                    test_acc = []
-                    test_loss_value = []
-                    pbar_test = trange(num_batches, ncols = 100)
-                    for it, d in zip(pbar_test, dl_test):
-                        d = {k:v.to(self.device) for k,v in d.items()}
-                        pbar_test.set_description(f"[VAL] Global ({gs}) -> [{it + 1}/{num_batches}]")
-
-                        with torch.no_grad():
-                            # get model results
-                            (policy, values, loss) = model(loss=True, **d)
-                            loss_total = loss[0].mean().item()  # gather
-                            if not isinstance(loss[1], int):
-                                loss_policy = loss[1].mean().item()  # gather
-                            else:
-                                loss_policy = -1
-                            loss_value = loss[2].mean().item()  # gather
-                            test_losses.append([loss_total])
-                            test_loss_value.append([loss_value])
-
-                            # calculate move accuracy
-                            move_acc = 0
-                            if policy is not None:
-                                policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
-                                policy = torch.argmax(policy, dim=-1)
-                                targets = d["input_ids"][:, 1:].contiguous().view(-1)
-                                move_acc = sum(targets == policy).item()
-                                move_acc /= targets.size(0)
-                                test_acc.append(move_acc)
-
-                            if model_config.loss_method == "ce":
-                                values = F.softmax(values[:, :-1, :], dim=-1).contiguous().view(-1, 3)  # [B, N, 3]
-                                values = values.matmul(torch.Tensor([-1, 0, 1]).to(d["value_targets"].device).float())
-                                mse = (values - d["value_targets"][:,1:].contiguous().view(-1)) ** 2
-                                test_losses[-1].append(mse.mean().item())
-
-                            # add to tensorboard
-                            # tb.add_scalar("test/loss_total", loss_total.item(), global_step=gs, walltime=time.time())
-                            # tb.add_scalar("test/loss_policy", loss_policy.item(), global_step=gs, walltime=time.time())
-                            # tb.add_scalar("test/loss_value", loss_value.item(), global_step=gs, walltime=time.time())
-                            # tb.add_scalar("test/move_acc", move_acc, global_step=gs, walltime=time.time())
-
-                    # now testing is complete so see the results, save or stop if needed
-                    test_losses = np.array(test_losses)
-                    losses = np.mean(test_losses[:, 0])
-                    test_acc = np.mean(test_acc)
-                    print(f"Loss: {losses:.3f}; Acc: {test_acc:.3f}", end = " ")
-                    log_dict.update({
-                        "test_loss": losses,
-                        "test_acc": test_acc
-                    })
-                    if model_config.loss_method == "ce":
-                        log_dict.update({"test_regression_loss": np.mean(test_losses[:, 1])})
-                    else:
-                        log_dict.update({"test_value_loss": np.mean(test_loss_value)})
-
-                    if prev_train_loss > losses:
-                        prev_train_loss = losses
-                        no_loss_steps = 0
-                        print("... previous loss was larger, updating values")
-                        cp = config.ckpt_path.replace(".pt", f"_{gs}.pt")
-                        self.save_checkpoint(cp)
-                    else:
-                        no_loss_steps += 1
-                        print(f"... previous loss was smaller. No improvements for past {no_loss_steps} evaluations")
-
-                    if config.patience != -1 and  no_loss_steps == config.patience:
-                        break_training = True
-
-                    model.train()
-
-                wandb.log(log_dict)
-                if break_training:
-                    print("Stopping training")
-                    break
-
-            model.train()
-            print("Final Step Save")
-            cp = config.ckpt_path.replace(".pt", f"_{gs}.pt")
-            self.save_checkpoint(cp)
+        model.train()
+        print("Final Step Save")
+        cp = config.ckpt_path.replace(".pt", f"_train_final.pt")
+        self.save_checkpoint(cp)
 
 class TrainerConfig:
     num_epochs = 2
