@@ -26,7 +26,7 @@ def get_model_config(model):
     return model.module.config if hasattr(model, "module") else model.config
 
 def verbose_print(*args, verbose):
-    # print only when verbose is Trues
+    # print only when verbose is True
     if verbose:
         print(*args)
 

@@ -8,6 +8,7 @@ import json
 import wget
 import time
 import chess
+import pickle
 import subprocess
 import numpy as np
 import multiprocessing
@@ -15,6 +16,12 @@ from chess import pgn
 from glob import glob
 from tqdm import trange
 from zipfile import ZipFile
+
+
+def verbose_print(*args, verbose):
+    # print only when verbose is True
+    if verbose:
+        print(*args)
 
 
 # loading the information already saved
@@ -25,13 +32,6 @@ results = {
     "0-1": "-1",
     '1/2 1/2': "0"
 }
-
-def seconds_to_hours(s):
-    mins = s // 60
-    hrs = mins // 60
-    days = hrs // 24
-    return days, hrs, mins
-
 
 def load_game_count(files):
     files_pbar = trange(len(files), ncols = 100)
@@ -49,10 +49,10 @@ def load_game_count(files):
     return game_count
 
 
-def parse_and_save_data(files, save_after, pid):
+def parse_and_save_data(files, save_after, pid, verbose = False):
     """parse the pgn files and save the data after `save_after` no. of games have been processed
     """
-    print(pid, "----", files)
+    verbose_print(pid, "----", files, verbose = verbose)
     seqs = []
     rseq = []
     cntr = 0
@@ -61,9 +61,8 @@ def parse_and_save_data(files, save_after, pid):
     game_count = 0
     game_count_loaded = 0
     for i in range(len(files)):
-        print(pid, "-- Opening -->>>", files[i])
+        verbose_print(pid, "-- Opening -->>>", files[i], verbose = verbose)
         fpath = files[i]
-        all_lines = []
         # files_pbar.set_description(f"Opening file: {fpath}")
         with open(fpath, 'r', encoding = "latin") as f:
             games = f.read()
@@ -82,7 +81,7 @@ def parse_and_save_data(files, save_after, pid):
                     try:
                         cg = pgn.read_game(io.StringIO(gs))
                     except:
-                        print(f"❌ could not load game #{cntr}")
+                        verbose_print(f"❌ could not load game #{cntr}", verbose = verbose)
                 
                 cntr += 1 # update main counter
                 result = cg.headers["Result"]
@@ -92,13 +91,13 @@ def parse_and_save_data(files, save_after, pid):
                     rseq.append(results[result])
 
             except Exception as e:
-                print(f"↗️ Can't open because: {e}")
+                verbose_print(f"↗️ Can't open because: {e}", verbose = verbose)
 
             if cntr % save_after == 0:
                 lm_file = f"data/chess_lm_{fcntr}_{pid}.txt"
                 res_file = f"data/chess_res_{fcntr}_{pid}.txt"
                 with open(lm_file, "w") as m, open(res_file, "w") as r:
-                    print("Saving Files...", lm_file, res_file)
+                    verbose_print("Saving Files...", lm_file, res_file, verbose = verbose)
                     m.write("\n".join(seqs))
                     r.write("\n".join(list(map(str, rseq))))
 
@@ -107,14 +106,14 @@ def parse_and_save_data(files, save_after, pid):
                 rseq = []
                 fcntr += 1
 
-        print(pid, "---- Removing file ...", fpath)
+        verbose_print(pid, "---- Removing file ...", fpath, verbose = verbose)
         os.remove(fpath)
 
     if len(seqs):
         lm_file = f"data/chess_lm_{fcntr}_{pid}.txt"
         res_file = f"data/chess_res_{fcntr}_{pid}.txt"
         with open(lm_file, "w") as m, open(res_file, "w") as r:
-            print("Saving Files...", lm_file, res_file)
+            verbose_print("Saving Files...", lm_file, res_file, verbose = verbose)
             m.write("\n".join(seqs))
             r.write("\n".join(list(map(str, rseq))))
 
@@ -124,10 +123,96 @@ def parse_and_save_data(files, save_after, pid):
         rseq = []
         fcntr += 1
 
-    print(f"Process: {pid} Done!")
+    verbose_print(f"Process: {pid} Done!", verbose = verbose)
 
 
-def multiprocessing_parsing_wrapper(files, save_after):
+def leela_dataset_compiler(files, save_after, pid, verbose=False):
+    """parse the pgn files and save the data after `save_after` no. of games have been processed.
+    This function is specifically built to parse leelachess self play games. which have the following
+    format:
+    1.Nf3 d5 2.g3 Nf6 3.Bg2 c5 4.d4 cxd4 5.O-O e6 6.Nxd4 Be7 7.c4 O-O 8.cxd5 exd5 9.Be3 Nc6 10.Qd3
+    Ng4 11.Rd1 Nxe3 12.Bxd5 0-1 {OL: 0}
+
+    If you need to understand how the files are written check here:
+    https://github.com/LeelaChessZero/lczero-client/blob/e3bdd17c5a96ddc4a6c6caab8dcfd68ea2aa620d/lc0_main.go#L237
+    """
+    verbose_print(":::: initialising PID:", pid, verbose = verbose)
+    seqs = []
+    rseq = []
+    legals = []
+    fcntr = 0
+    game_count_loaded = 0
+    for i in range(len(files)):
+        with open(files[i], "r") as f:
+            game_str = f.read()
+        cg = pgn.read_game(io.StringIO(game_str))
+        if "0-1" in game_str:
+            res = -1
+        elif "1-0" in game_str:
+            res = 1
+        elif "1/2-1/2" in game_str:
+            res = 0
+        else:
+            continue
+
+        # now convert this game to out moves and create legal masking
+        seq = []
+        legal_mask = []
+        b = chess.Board()
+        for x in cg.mainline():
+            mv = m2id[str(x.move)[:4]]
+            b.push(x.move)
+
+            # store data in bool to save memory (1793 bytes vs 14344 bytes) use array.nbytes
+            legal = np.zeros(shape=(len(m2id))).astype(np.bool)
+            legal[[m2id[str(x)[:4]] for x in b.legal_moves]] = True
+
+            seq.append(mv)
+            legal_mask.append(legal)
+
+        # add to master 
+        rseq.append(res)
+        seqs.append(seq)
+        legals.append(legal_mask)
+
+        if i and i % save_after == 0:
+            lm_file = f"data/chess_lm_{fcntr}_{pid}.p"
+            res_file = f"data/chess_res_{fcntr}_{pid}.p"
+            msks_file = f"data/chess_msks_{fcntr}_{pid}.p"
+
+            # this time not writing things as txt files
+            # store data as pickle
+            with open(lm_file, "wb") as lm, open(res_file, "wb") as res, open(msks_file, "wb") as mf:
+                pickle.dump(rseq, lm)
+                pickle.dump(seqs, res)
+                pickle.dump(legals, mf)
+
+            game_count_loaded += len(seqs)
+            seqs = []
+            rseq = []
+            fcntr += 1
+
+    if len(seqs):
+        lm_file = f"data/chess_lm_{fcntr}_{pid}.p"
+        res_file = f"data/chess_res_{fcntr}_{pid}.p"
+        msks_file = f"data/chess_msks_{fcntr}_{pid}.p"
+
+        # this time not writing things as txt files
+        # store data as pickle
+        with open(lm_file, "wb") as lm, open(res_file, "wb") as res, open(msks_file, "wb") as mf:
+            pickle.dump(rseq, lm)
+            pickle.dump(seqs, res)
+            pickle.dump(legals, mf)
+
+        game_count_loaded += len(seqs)
+        seqs = []
+        rseq = []
+        fcntr += 1
+
+    verbose_print(f"Process: {pid} Done! Loaded: {game_count_loaded} Games!", verbose = verbose)
+
+
+def multiprocessing_parsing_wrapper(files, save_after, leela = False):
     WORKERS = min(20, len(files))
     process_list = []
     
@@ -136,9 +221,10 @@ def multiprocessing_parsing_wrapper(files, save_after):
         i = i % WORKERS # to put in proper bucket
         files_bkts[i].append(f)
 
+    func = parse_and_save_data if not leela else leela_dataset_compiler
     for pid in range(WORKERS):
         process_list.append(multiprocessing.Process(
-            target = parse_and_save_data,
+            target = func,
             args = (files_bkts[pid], save_after, pid,)
         ))
         process_list[-1].start()
@@ -153,7 +239,7 @@ Chess LM sata preparation script. Many things in this script are
     hardcoded and you might need to open it and change those.
 Usage: download.py [-hdpmc] [options]
 -h     : Display this help and exit
--d     : Download the data from assets/links2000.txt file
+-d     : Download the data from assets/lc0.txt file
          Extract the ZIP files and dumps them in data/ folder
 -p     : Parse the .pgn files in data/ folder using multprocessing
          default workers set at 20. After parsing process for each
@@ -163,6 +249,7 @@ Usage: download.py [-hdpmc] [options]
          following arguments:
          - <m:int> maximum length for each game
          - <f:str ["npz","hdf5"]> format to store data in
+-l     : Builds Leela Chess Dataset for files in data/ folder
 '''.strip()
     print(h)
 
@@ -172,7 +259,7 @@ if sys.argv[1] == "-h":
 
 elif sys.argv[1] == "-d":
     # download files and unzip
-    links = open('assets/links2000.txt').readlines()
+    links = open('assets/lc0.txt').readlines()
     os.makedirs("data/", exist_ok = True)
     download_start_time = time.time()
     zippaths = []
@@ -290,7 +377,7 @@ elif sys.argv[1] == "-c":
             # get the targets for values as [0,res,-res,res,-res...]
             game_res = float(game_res)
             res = np.ones(len(lm)) * game_res
-            res[np.arange(1, len(lm), 2)] = -game_res
+            res[1:len(lm):2] = -game_res
             results.extend([0] + res.tolist())  # first will always generate 0
     
     # convert to lms and results
@@ -309,6 +396,62 @@ elif sys.argv[1] == "-c":
     elif format == "npz":
         print("Saving Numpy zip at data/clm.npz")
         np.savez("data/clm.npz", lms=lms, res=results)
+
+
+elif sys.argv[1] == "-l":
+    # this stores the leela chess dump
+    parsing_start_time = time.time()
+    pgnfiles = glob('data/*.pgn')
+    print(f"Found {len(pgnfiles)} files.")
+    multiprocessing_parsing_wrapper(pgnfiles, 1000000, leela = True)
+    ty_res = time.gmtime(time.time() - parsing_start_time)
+    res = time.strftime("%H:%M:%S", ty_res)
+    print(f"Parsing completed in {res}")
+
+    # filter all the files
+    all_files = glob("data/*.p")
+    by_order = {} # lm: (res, msks)
+    for f in all_files:
+        # lm_file --> f"data/chess_lm_{fcntr}_{pid}.p"
+        name = "".join(re.findall("\d+_\d+", f))
+        if not name:
+            continue
+        # mode = "res" if "res" in f else "lm"
+        if "lm" in f:
+            mode = "lm"
+        elif "res" in f:
+            mode = "res"
+        elif "msks" in f:
+            mode = "msk"
+        else:
+            continue
+
+        if name not in by_order:
+            by_order[name] = {mode: f}
+        else:
+            by_order[name].update({mode: f})
+
+    # now we open files one by one
+    total_moves = 0
+    all_sequences = []
+    all_results = []
+    all_masks = []
+    for name in by_order:
+        print("Reading files...", name)
+        with open(by_order[name]["lm"], "r") as lm, \
+             open(by_order[name]["res"], "r") as res, \
+             open(by_order[name]["msk"], "r") as msk:
+            lm = pickle.load(lm)
+            res = pickle.load(res)
+            msk = pickle.load(msk)
+            # uncomment below to see the number of moves
+            total_moves += sum([len(x) for x in lm])
+            all_sequences.extend(lm)
+            all_results.extend(res)
+            all_masks.extend(msk)
+
+    # restructure it and return
+    
 
 else:
     print_help()
