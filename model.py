@@ -167,9 +167,9 @@ class BetaChess(nn.Module):
         self.policy_head = PolicyHead(config)
         self.value_head = ValueHead(config)
 
-    def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
+    def forward(self, input_ids, position_ids = None, value_targets = None, loss = None, **gptkwargs):
         config = self.config
-        x = self.body(input_ids, return_dict = True, **gptkwargs)
+        x = self.body(input_ids, position_ids = position_ids, return_dict = True, **gptkwargs)
         logits = self.policy_head(x.last_hidden_state)
         values = self.value_head(x.last_hidden_state)
         out = (logits, values)
@@ -662,20 +662,27 @@ class TrainerConfig:
 ####### Dataset ################################
 ################################################
 class FullDatasetPreLoaded(Dataset):
-    def __init__(self, lms, results, m2id):
+    def __init__(self, lms, results, m2id, pos = None):
         self.lms = lms
         self.results = results
         self.m2id = m2id
+        self.pos = pos
         self.shuffle = True
 
     def __len__(self):
         return self.lms.shape[0]
 
     def __getitem__(self, index):
-        return {
+        ret_dict = {
             "input_ids": torch.from_numpy(self.lms[index]).long(),
             "value_targets": torch.from_numpy(self.results[index]).float()
         }
+        if self.pos != None:
+            ret_dict.update({
+                "position_ids": torch.from_numpy(self.pos[index]).long(),
+            })
+        return ret_dict
+        
 
 def get_datasets(config, split):
     """This function returns two datasets one for training and another for holdout
@@ -687,7 +694,9 @@ def get_datasets(config, split):
             m2id["[GAME]"] = GAME  # new game flag
         else:
             GAME = m2id["[GAME]"]
-
+    
+    # init position IDs with None
+    pos = None
     if config.lm[-4:] == "hdf5":
         # this is the hdf5
         st = time.time()
@@ -702,6 +711,10 @@ def get_datasets(config, split):
         clm = np.load("data/clm.npz")
         lms = clm["lms"]
         results = clm["res"]
+        try:
+            pos = clm["pos"]
+        except:
+            pos = None
 
         lms = lms.reshape(-1, config.maxlen)
         results = results.reshape(-1, config.maxlen)
@@ -742,8 +755,8 @@ def get_datasets(config, split):
     print(f"Moves: {lms.shape}; Results: {results.shape}")
 
     test_idx = int(split * lms.shape[0])
-    ds_train = FullDatasetPreLoaded(lms[test_idx:], results[test_idx:], m2id)
-    ds_test = FullDatasetPreLoaded(lms[:test_idx], results[:test_idx], m2id)
+    ds_train = FullDatasetPreLoaded(lms[test_idx:], results[test_idx:], m2id, pos)
+    ds_test = FullDatasetPreLoaded(lms[:test_idx], results[:test_idx], m2id, pos)
     return ds_train, ds_test
 
 
