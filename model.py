@@ -5,6 +5,7 @@ import json
 import time
 import math
 import wandb
+import pickle
 import random
 import numpy as np
 from tqdm import trange
@@ -167,9 +168,9 @@ class BetaChess(nn.Module):
         self.policy_head = PolicyHead(config)
         self.value_head = ValueHead(config)
 
-    def forward(self, input_ids, position_ids = None, value_targets = None, loss = None, **gptkwargs):
+    def forward(self, input_ids, position_ids = None, value_targets = None, loss = None):
         config = self.config
-        x = self.body(input_ids, position_ids = position_ids, return_dict = True, **gptkwargs)
+        x = self.body(input_ids, position_ids = position_ids, return_dict = True)
         logits = self.policy_head(x.last_hidden_state)
         values = self.value_head(x.last_hidden_state)
         out = (logits, values)
@@ -196,8 +197,53 @@ class BetaChess(nn.Module):
                 value_targets = value_targets[:, 1:].contiguous().view(-1) + 1 # [-1, 0, 1] --> [0, 1, 2]
                 loss_value = F.cross_entropy(value_reshape, value_targets.long())
 
-            loss = loss_policy + loss_value # weight regularisation added in
+            loss = loss_policy + loss_value # weight regularisation added in optim
 
+            out = (logits, values, (loss, loss_policy, loss_value))
+        return out
+
+#
+# This method below uses the complete sequence of the game from start to end
+# hope is that with this better representation the game play would be better
+#
+class BetaChessForFullGameSequence(nn.Module):
+    # like BetaChess but instead takes the custom labels
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        config = ModelConfig(**vars(self.config))
+        config.n_layer = config.n_layer - 2
+        self.body = GPT2Model(config)  # residual tower in AlphaZero
+
+        # the policy head and value head are now similar to what is in AlphaZero
+        self.policy_head = PolicyHead(config)
+        self.value_head = ValueHead(config)
+
+    def forward(self, input_ids, attention_mask, value_targets = None, labels = None):
+        x = self.body(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            return_dict=True
+        )
+        logits = self.policy_head(x.last_hidden_state)
+        values = self.value_head(x.last_hidden_state)
+        out = (logits, values)
+
+        if labels is not None and value_targets is not None:
+
+            # categorical cross entropy
+            logits_reshape = logits.contiguous().view(-1, logits.size(-1))
+            policy_targets = labels.contiguous().view(-1)
+            non_pad_idx = policy_targets != -100.
+            # print(non_pad_idx)
+            loss_policy = F.cross_entropy(logits_reshape[non_pad_idx], policy_targets[non_pad_idx])
+
+            # MSE loss
+            values_reshape = F.tanh(values).contiguous().view(-1)
+            values_targets = value_targets.contiguous().view(-1)
+            loss_value = F.mse_loss(values_reshape[non_pad_idx], values_targets[non_pad_idx]).mean()
+
+            loss = loss_policy + loss_value  # weight regularisation added in optim
             out = (logits, values, (loss, loss_policy, loss_value))
         return out
 
@@ -215,7 +261,6 @@ class ValueOnlyNetwork(nn.Module):
             self.value_head = nn.Linear(config.n_embd, 3)
 
     def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
-        print("asdasdfasdfasdfas", input_ids.size())
         config = self.config
         x = self.gpt(input_ids, return_dict = True, **gptkwargs)
         values = self.value_head(x.last_hidden_state)
@@ -263,6 +308,25 @@ class ModelConfig(PretrainedConfig):
             "\n".join([
                 f"{k}\t{getattr(self, k)}" for k in list(set(self.attrs))
             ]) + "\n"
+
+
+class TinyConfig(PretrainedConfig):    
+    def __init__(self, n_positions, n_ctx, **kwargs):
+        self.n_positions = n_positions
+        self.n_ctx = n_ctx
+        for k,v in kwargs.items():
+            setattr(self, k,v)
+
+        self.vocab_size = 2000
+        self.n_embd = 18
+        self.n_layer = 2
+        self.n_head = 2
+        self.loss_method = "mse"  # add loss method for values
+        self.resid_pdrop = 0.1
+        self.embd_pdrop = 0.1
+        self.attn_pdrop = 0.1
+        self.initializer_range = 0.02
+
 
 # --- helper functions --- #
 def init_weights(module):
@@ -682,7 +746,7 @@ class FullDatasetPreLoaded(Dataset):
                 "position_ids": torch.from_numpy(self.pos[index]).long(),
             })
         return ret_dict
-        
+
 
 def get_datasets(config, split):
     """This function returns two datasets one for training and another for holdout
@@ -757,6 +821,90 @@ def get_datasets(config, split):
     test_idx = int(split * lms.shape[0])
     ds_train = FullDatasetPreLoaded(lms[test_idx:], results[test_idx:], m2id, pos)
     ds_test = FullDatasetPreLoaded(lms[:test_idx], results[:test_idx], m2id, pos)
+    return ds_train, ds_test
+
+#
+# This method below uses the complete sequence of the game from start to end
+# hope is that with this better representation the game play would be better
+#
+class FullGameLoadedDataset(Dataset):
+    def __init__(self, config, lms, results):
+        self.config = config
+        self.lms = lms
+        self.res = results
+
+        with open(config.m2id, "r") as m:
+            m2id = json.load(m)
+            if "[GAME]" not in m2id:  # only if not found
+                GAME = len(m2id)
+                m2id["[GAME]"] = GAME  # new game flag
+            else:
+                GAME = m2id["[GAME]"]
+        
+        self.GAME = GAME
+
+    def __len__(self):
+        return self.lms.shape[0]
+
+    def __getitem__(self, i):
+        m = self.config.maxlen
+        G = self.GAME
+        lm = self.lms[i]
+        res = self.res[i]
+        game_res = float(res)
+
+        upto_id = len(lm)
+
+        # lm --> [G] + [m1, m2 ... mn] + [G]
+        lm = [G] + lm + [G]
+
+        # get the targets for values as [res,-res,res,-res...]
+        res = np.ones(len(lm)) * game_res
+        res[2:len(lm):2] = -game_res
+        res[[0, -1]] = 0 # first and last tag [GAME] has to predict 0
+        res = res.tolist()
+
+        # create the attention mask
+        am = [1 for _ in range(len(lm))] # attention mask
+
+        # now handle smaller longer sequences
+        if len(lm) > m + 1:
+            lm = lm[:m+1]
+            res = res[:m+1]
+            am = am[:m] # m+1 -1 = m
+
+        # need to perform padding
+        elif len(lm) < m + 1:
+            to_add = m+1-len(lm)
+            lm = lm + [G for _ in range(to_add)]
+            res = res + [0 for _ in range(to_add)]
+            am  = am + [0 for _ in range(to_add-1)]
+
+        labels = torch.Tensor(lm[1:]).long()
+        if upto_id < m:
+            labels[upto_id:] = -100
+
+        return {
+            "input_ids": torch.Tensor(lm[:-1]).long(),
+            "attention_mask": torch.Tensor(am).long(),
+            "value_targets": torch.Tensor(res)[1:].float(),
+            "labels": labels
+        }
+
+
+def get_datasets_full_game(config, split):
+    # same as get_datasets but for FullGame
+    st = time.time()
+    with open(config.pkl_path, "rb") as f:
+        clm = pickle.load(f)
+
+    lms = clm["lms"]
+    results = clm["res"]
+    print(f"Pickle Loading took: {time.time()-st}s")
+
+    test_idx = int(split * lms.shape[0])
+    ds_train = FullGameLoadedDataset(config, lms[test_idx:], results[test_idx:])
+    ds_test = FullGameLoadedDataset(config, lms[:test_idx], results[:test_idx])
     return ds_train, ds_test
 
 

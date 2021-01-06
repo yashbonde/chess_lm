@@ -6,7 +6,17 @@ from argparse import ArgumentParser
 from model import *
 
 # load user args
-args = ArgumentParser(description="Train a GPT2 model to play chess on moves only")
+args = ArgumentParser(description="""
+Train a GPT2 model to play chess on moves only. There are two different models with a single API to train:
+
+* One method uses GPT style blocks
+[m0 .......... mn]
+[mn+1 . m0 ... mk]
+
+* Other method uses Machine Translation
+[m0 ....... mn ... PAD PAD PAD]
+[m0 ... mk ....... PAD PAD PAD]
+""".split())
 
 # data args
 args.add_argument("--lmtrain", type=str, default = "data/clm.npz", help="path to train_lm file")
@@ -59,14 +69,20 @@ elif args.lmtrain[-3:] == "npz":
     print("Using numpy zips")
     assert args.maxlen % 85 == 0, "using numpy means maxlen % 85 == 0"
 
+# There are three different datamodels as mentioned above
 dataConfig = DataConfig(
     lm=args.lmtrain,
     rf=args.res,
     m2id=args.m2id,
     maxlen=args.maxlen,
-    buffer= args.buffer,
+    buffer=args.buffer,
 )
-dstrain, dstest = get_datasets(dataConfig, args.split)
+if not args.model == "beta_full":
+    # this is the case for a different model and so requires a different dataloader
+    dstrain, dstest = get_datasets_full_game(dataConfig, args.split)
+else:
+    # this is the legacy loader and uses the conventional model
+    dstrain, dstest = get_datasets(dataConfig, args.split)
 print(dataConfig)
 
 # use dropout if defined
@@ -91,6 +107,8 @@ elif args.model == "base":
     model = BaseHFGPT(modelConfig)
 elif args.model == "value":
     model = ValueOnlyNetwork(modelConfig)
+elif args.model == "beta_full":
+    model = BetaChessForFullGameSequence(modelConfig)
 else:
     raise ValueError(f"Found wrong model name: {args.model}")
 print(f"Model Size: {sum(dict((p.data_ptr(), p.numel()) for p in model.parameters()).values())}")

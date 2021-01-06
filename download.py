@@ -126,7 +126,7 @@ def parse_and_save_data(files, save_after, pid, verbose = False):
     verbose_print(f"Process: {pid} Done!", verbose = verbose)
 
 
-def leela_dataset_compiler(files, save_after, pid, verbose=False):
+def leela_dataset_compiler(files, save_after, pid, verbose=False, _trange = False):
     """parse the pgn files and save the data after `save_after` no. of games have been processed.
     This function is specifically built to parse leelachess self play games. which have the following
     format:
@@ -142,7 +142,8 @@ def leela_dataset_compiler(files, save_after, pid, verbose=False):
     legals = []
     fcntr = 0
     game_count_loaded = 0
-    for i in range(len(files)):
+    pbar = trange(len(files)) if _trange else range(len(files))
+    for i in pbar:
         with open(files[i], "r") as f:
             game_str = f.read()
         cg = pgn.read_game(io.StringIO(game_str))
@@ -164,6 +165,8 @@ def leela_dataset_compiler(files, save_after, pid, verbose=False):
             b.push(x.move)
 
             # store data in bool to save memory (1793 bytes vs 14344 bytes) use array.nbytes
+            # using bitarray is even smaller (just 239 bytes) but it does not work on vast.ai's
+            # Docker python
             legal = np.zeros(shape=(len(m2id))).astype(np.bool)
             legal[[m2id[str(x)[:4]] for x in b.legal_moves]] = True
 
@@ -176,16 +179,11 @@ def leela_dataset_compiler(files, save_after, pid, verbose=False):
         legals.append(legal_mask)
 
         if i and i % save_after == 0:
-            lm_file = f"data/chess_lm_{fcntr}_{pid}.p"
-            res_file = f"data/chess_res_{fcntr}_{pid}.p"
-            msks_file = f"data/chess_msks_{fcntr}_{pid}.p"
-
-            # this time not writing things as txt files
-            # store data as pickle
-            with open(lm_file, "wb") as lm, open(res_file, "wb") as res, open(msks_file, "wb") as mf:
-                pickle.dump(rseq, lm)
-                pickle.dump(seqs, res)
-                pickle.dump(legals, mf)
+            # this time not writing things as txt files store data as pickle
+            pkl_path = f"data/chess_{fcntr}_{pid}.p"
+            print(f"Save data at {pkl_path}")
+            with open(pkl_path, "wb") as f:
+                pickle.dump({"lms": seqs, "res": rseq, "msk": legals}, f)
 
             game_count_loaded += len(seqs)
             seqs = []
@@ -193,16 +191,11 @@ def leela_dataset_compiler(files, save_after, pid, verbose=False):
             fcntr += 1
 
     if len(seqs):
-        lm_file = f"data/chess_lm_{fcntr}_{pid}.p"
-        res_file = f"data/chess_res_{fcntr}_{pid}.p"
-        msks_file = f"data/chess_msks_{fcntr}_{pid}.p"
-
-        # this time not writing things as txt files
-        # store data as pickle
-        with open(lm_file, "wb") as lm, open(res_file, "wb") as res, open(msks_file, "wb") as mf:
-            pickle.dump(rseq, lm)
-            pickle.dump(seqs, res)
-            pickle.dump(legals, mf)
+        # this time not writing things as txt files store data as pickle
+        pkl_path = f"data/chess_{fcntr}_{pid}.p"
+        print(f"Save data at {pkl_path}")
+        with open(pkl_path, "wb") as f:
+            pickle.dump({"lms": seqs, "res": rseq, "msk": legals}, f)
 
         game_count_loaded += len(seqs)
         seqs = []
