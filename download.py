@@ -49,6 +49,53 @@ def load_game_count(files):
     return game_count
 
 
+def get_all_moves():
+    """return all possible moves in the baord and map those to squares"""
+    num_moves = 0
+    moves = []
+    # for x in range(8):
+    for x, f in enumerate(chess.FILE_NAMES):
+        # for y in range(8):
+        for y, r in enumerate(chess.RANK_NAMES):
+            # print(x, y)
+            # knight moves
+            kmoves = [(2, 1), (1, 2), (-1, 2), (-2, 1), (-2, -1), (-1, -2), (1, -2), (2, -1)]
+            for mv in kmoves:
+                if 7 >= x + mv[0] >=0 and 7 >= y + mv[1] >=0:
+                    sq = chess.square(x + mv[0], y + mv[1])
+                    moves.append("{}{}{}".format(f,r, chess.square_name(sq)))
+
+            for i in range(8):
+                # hv moves
+                if i != x:
+                    sq = chess.square(i, y)
+                    moves.append("{}{}{}".format(f,r, chess.square_name(sq)))
+                if i != y:
+                    sq = chess.square(x, i)
+                    moves.append("{}{}{}".format(f,r, chess.square_name(sq)))
+                    
+            # diag moves --> flip x, ys
+            directions = list(map(list, [
+                zip(range(x + 1, 8), range(y + 1, 8)),
+                zip(range(x + 1, 8), range(y - 1, -1, -1)),
+                zip(range(x - 1, -1, -1), range(y + 1, 8)),
+                zip(range(x - 1, -1, -1), range(y - 1, -1, -1)),
+            ]))
+
+            diag_moves = []
+            for d in directions:
+                diag_moves.extend(d)
+            for i,mv in enumerate(diag_moves):
+                sq = chess.square(*mv)
+                if sq == "{}{}".format(f,r):
+                    continue
+                diag_moves[i] = "{}{}{}".format(f,r, chess.square_name(sq))
+            moves.extend(diag_moves)
+
+    moves_idx = {mv:i for i,mv in enumerate(moves)}
+    return moves_idx
+
+
 def parse_and_save_data(files, save_after, pid, verbose = False):
     """parse the pgn files and save the data after `save_after` no. of games have been processed
     """
@@ -139,7 +186,7 @@ def leela_dataset_compiler(files, save_after, pid, verbose=False, _trange = Fals
     verbose_print(":::: initialising PID:", pid, verbose = verbose)
     seqs = []
     rseq = []
-    legals = []
+    # legals = []
     fcntr = 0
     game_count_loaded = 0
     pbar = trange(len(files)) if _trange else range(len(files))
@@ -159,31 +206,32 @@ def leela_dataset_compiler(files, save_after, pid, verbose=False, _trange = Fals
         # now convert this game to out moves and create legal masking
         seq = []
         legal_mask = []
-        b = chess.Board()
+        # b = chess.Board()
         for x in cg.mainline():
             mv = m2id[str(x.move)[:4]]
-            b.push(x.move)
+            # b.push(x.move)
 
             # store data in bool to save memory (1793 bytes vs 14344 bytes) use array.nbytes
             # using bitarray is even smaller (just 239 bytes) but it does not work on vast.ai's
             # Docker python
-            legal = np.zeros(shape=(len(m2id))).astype(np.bool)
-            legal[[m2id[str(x)[:4]] for x in b.legal_moves]] = True
+            # legal = np.zeros(shape=(len(m2id))).astype(np.bool)
+            # legal[[m2id[str(x)[:4]] for x in b.legal_moves]] = True
 
             seq.append(mv)
-            legal_mask.append(legal)
+            # legal_mask.append(legal)
 
         # add to master 
         rseq.append(res)
         seqs.append(seq)
-        legals.append(legal_mask)
+        # legals.append(legal_mask)
 
         if i and i % save_after == 0:
             # this time not writing things as txt files store data as pickle
             pkl_path = f"data/chess_{fcntr}_{pid}.p"
             print(f"Save data at {pkl_path}")
             with open(pkl_path, "wb") as f:
-                pickle.dump({"lms": seqs, "res": rseq, "msk": legals}, f)
+                # pickle.dump({"lms": seqs, "res": rseq, "msk": legals}, f)
+                pickle.dump({"lms": seqs, "res": rseq}, f)
 
             game_count_loaded += len(seqs)
             seqs = []
@@ -401,98 +449,34 @@ elif sys.argv[1] == "-l":
     res = time.strftime("%H:%M:%S", ty_res)
     print(f"Parsing completed in {res}")
 
-    # filter all the files
-    all_files = glob("data/*.p")
-    by_order = {} # lm: (res, msks)
-    for f in all_files:
-        # lm_file --> f"data/chess_lm_{fcntr}_{pid}.p"
-        name = "".join(re.findall("\d+_\d+", f))
-        if not name:
-            continue
-        # mode = "res" if "res" in f else "lm"
-        if "lm" in f:
-            mode = "lm"
-        elif "res" in f:
-            mode = "res"
-        elif "msks" in f:
-            mode = "msk"
-        else:
-            continue
-
-        if name not in by_order:
-            by_order[name] = {mode: f}
-        else:
-            by_order[name].update({mode: f})
-
     # now we open files one by one
+    all_files = glob("data/*.p")
     total_moves = 0
     all_sequences = []
     all_results = []
-    all_masks = []
-    for name in by_order:
+    for name in all_files:
         print("Reading files...", name)
-        with open(by_order[name]["lm"], "r") as lm, \
-             open(by_order[name]["res"], "r") as res, \
-             open(by_order[name]["msk"], "r") as msk:
-            lm = pickle.load(lm)
-            res = pickle.load(res)
-            msk = pickle.load(msk)
+        with open(name, "r") as f:
+            data = pickle.load(f)
+            lms = data["lms"]
             # uncomment below to see the number of moves
-            total_moves += sum([len(x) for x in lm])
-            all_sequences.extend(lm)
-            all_results.extend(res)
-            all_masks.extend(msk)
+            total_moves += sum([len(x) for x in lms])
+            all_sequences.extend(lms)
+            all_results.extend(data["res"])
+
+    # print
+    print("-"*70)
+    print(f"total_moves: {total_moves}")
+    print(f"total_games: {len(all_sequences)}")
+    print("-"*70)
 
     # restructure it and return
-    
+    print("Writing file data/leela.p")
+    with open("data/leela.p", "wb") as f:
+        pickle.dumps({
+            "lms": all_sequences,
+            "res": all_results
+        })
 
 else:
     print_help()
-
-# ----------------------------------------------- #
-
-def get_all_moves():
-    """return all possible moves in the baord and map those to squares"""
-    num_moves = 0
-    moves = []
-    # for x in range(8):
-    for x, f in enumerate(chess.FILE_NAMES):
-        # for y in range(8):
-        for y, r in enumerate(chess.RANK_NAMES):
-            # print(x, y)
-            # knight moves
-            kmoves = [(2, 1), (1, 2), (-1, 2), (-2, 1), (-2, -1), (-1, -2), (1, -2), (2, -1)]
-            for mv in kmoves:
-                if 7 >= x + mv[0] >=0 and 7 >= y + mv[1] >=0:
-                    sq = chess.square(x + mv[0], y + mv[1])
-                    moves.append("{}{}{}".format(f,r, chess.square_name(sq)))
-
-            for i in range(8):
-                # hv moves
-                if i != x:
-                    sq = chess.square(i, y)
-                    moves.append("{}{}{}".format(f,r, chess.square_name(sq)))
-                if i != y:
-                    sq = chess.square(x, i)
-                    moves.append("{}{}{}".format(f,r, chess.square_name(sq)))
-                    
-            # diag moves --> flip x, ys
-            directions = list(map(list, [
-                zip(range(x + 1, 8), range(y + 1, 8)),
-                zip(range(x + 1, 8), range(y - 1, -1, -1)),
-                zip(range(x - 1, -1, -1), range(y + 1, 8)),
-                zip(range(x - 1, -1, -1), range(y - 1, -1, -1)),
-            ]))
-
-            diag_moves = []
-            for d in directions:
-                diag_moves.extend(d)
-            for i,mv in enumerate(diag_moves):
-                sq = chess.square(*mv)
-                if sq == "{}{}".format(f,r):
-                    continue
-                diag_moves[i] = "{}{}{}".format(f,r, chess.square_name(sq))
-            moves.extend(diag_moves)
-
-    moves_idx = {mv:i for i,mv in enumerate(moves)}
-    return moves_idx
