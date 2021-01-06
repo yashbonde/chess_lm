@@ -887,7 +887,7 @@ class FullGameLoadedDataset(Dataset):
         return {
             "input_ids": torch.Tensor(lm[:-1]).long(),
             "attention_mask": torch.Tensor(am).long(),
-            "value_targets": torch.Tensor(res)[1:].float(),
+            "value_targets": torch.Tensor(res)[:-1].float(),
             "labels": labels
         }
 
