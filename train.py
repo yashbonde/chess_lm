@@ -27,10 +27,10 @@ args.add_argument("--m2id", type=str, default = "assets/moves.json", help="path 
 args.add_argument("--maxlen", type = int, default = 85 * 2, help = "maximum length")
 args.add_argument("--ds", type = str, default = "full", help = "to use in memory or iterable Dataset [full / iter]")
 args.add_argument("--buffer", type = int, default = 99999, help = "buffer size for DataSet")
-args.add_argument("--n_embd", type = int, default = 200, help = "embedding dim")
-args.add_argument("--n_layer", type = int, default = 10, help = "number of layers of the model")
-args.add_argument("--n_head", type = int, default = 10, help = "number of heads for MHA")
-args.add_argument("--model", type = str, default = "beta", help = "which model to train, select from `base`, `beta`")
+args.add_argument("--n_embd", type = int, default = 240, help = "embedding dim")
+args.add_argument("--n_layer", type = int, default = 12, help = "number of layers of the model")
+args.add_argument("--n_head", type = int, default = 12, help = "number of heads for MHA")
+args.add_argument("--model", type = str, default = "beta_full", help = "which model to train, select from `base`, `beta`")
 args.add_argument("--use_drop", type = bool, default = False, help = "set `True` to use dropout wuith value 0.1")
 
 # optim settings
@@ -42,14 +42,14 @@ args.add_argument("--beta2", type = int, default = 0.95, help = "Adam.beta2") # 
 args.add_argument("--scheduler", type=str, default = "GPT3", help= "LR scheduler one of `CosineAnnealingWarmRestarts,"
     "OneCycleLR, MultiStepLR, NoamDecay, CosineDecay, WarmupConstant, GPT3`"
 )
-args.add_argument("--batch_size", type=int, default=150, help="batch size")
+args.add_argument("--batch_size", type=int, default=40, help="batch size")
 args.add_argument("--split", type=float, default=0.01, help="ratio of data to use as testing")
 args.add_argument("--num_epochs", type=int, default=1, help="Number of epochs to train / finetune")
 args.add_argument("--warmup_perc", type=float, default=0.2, help="weight decay value for L2 reg.")
 args.add_argument("--weight_decay", type=float, default=0.1, help="weight decay value for L2 reg.")
 args.add_argument("--save_folder", type=str, default="models", help="Folder to save model to")
 args.add_argument("--name", type=str, default="cgpt", help="Saved name to have filepath `<name>.pt`")
-args.add_argument("--test_every", type=int, default=1000, help="Test after these global steps")
+args.add_argument("--test_every", type=int, default=10000, help="Test after these global steps")
 args.add_argument("--patience", type=int, default=1, help="Early stopping partience value")
 args = args.parse_args()
 
@@ -77,7 +77,7 @@ dataConfig = DataConfig(
     maxlen=args.maxlen,
     buffer=args.buffer,
 )
-if not args.model == "beta_full":
+if args.model == "beta_full":
     # this is the case for a different model and so requires a different dataloader
     dstrain, dstest = get_datasets_full_game(dataConfig, args.split)
 else:
@@ -102,12 +102,16 @@ modelConfig = ModelConfig(
 )
 print(modelConfig)
 if args.model == "beta":
+    print(":: BetaChess")
     model = BetaChess(modelConfig)
 elif args.model == "base":
+    print(":: BaseHFGPT")
     model = BaseHFGPT(modelConfig)
 elif args.model == "value":
+    print(":: ValueOnlyNetwork")
     model = ValueOnlyNetwork(modelConfig)
 elif args.model == "beta_full":
+    print(":: BetaChessForFullGameSequence")
     model = BetaChessForFullGameSequence(modelConfig)
 else:
     raise ValueError(f"Found wrong model name: {args.model}")

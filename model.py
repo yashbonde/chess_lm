@@ -219,7 +219,7 @@ class BetaChessForFullGameSequence(nn.Module):
         self.policy_head = PolicyHead(config)
         self.value_head = ValueHead(config)
 
-    def forward(self, input_ids, attention_mask, value_targets = None, labels = None):
+    def forward(self, input_ids, attention_mask, value_targets = None, labels = None, loss = None):
         x = self.body(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -828,10 +828,12 @@ def get_datasets(config, split):
 # hope is that with this better representation the game play would be better
 #
 class FullGameLoadedDataset(Dataset):
-    def __init__(self, config, lms, results):
+    def __init__(self, config, lms, results, m2id):
         self.config = config
         self.lms = lms
         self.res = results
+        self.m2id = m2id
+        self.shuffle = True
 
         with open(config.m2id, "r") as m:
             m2id = json.load(m)
@@ -844,25 +846,28 @@ class FullGameLoadedDataset(Dataset):
         self.GAME = GAME
 
     def __len__(self):
-        return self.lms.shape[0]
+        return len(self.lms) #.shape[0]
 
     def __getitem__(self, i):
         m = self.config.maxlen
         G = self.GAME
         lm = self.lms[i]
         res = self.res[i]
-        game_res = float(res)
-
-        upto_id = len(lm)
 
         # lm --> [G] + [m1, m2 ... mn] + [G]
-        lm = [G] + lm + [G]
+        lm = lm[1:] + [G]
+        lm = lm.tolist()
+        upto_id = len(lm)
 
         # get the targets for values as [res,-res,res,-res...]
-        res = np.ones(len(lm)) * game_res
-        res[2:len(lm):2] = -game_res
-        res[[0, -1]] = 0 # first and last tag [GAME] has to predict 0
-        res = res.tolist()
+        if isinstance(res, (float, int)):
+            game_res = float(res)
+            res = np.ones(len(lm)) * game_res
+            res[2:len(lm):2] = -game_res
+            res[[0, -1]] = 0 # first and last tag [GAME] has to predict 0
+            res = res.tolist()
+        else:
+            res = res.tolist()[1:] # move results by one
 
         # create the attention mask
         am = [1 for _ in range(len(lm))] # attention mask
@@ -870,41 +875,60 @@ class FullGameLoadedDataset(Dataset):
         # now handle smaller longer sequences
         if len(lm) > m + 1:
             lm = lm[:m+1]
-            res = res[:m+1]
-            am = am[:m] # m+1 -1 = m
+            res = res[:m]
+            am = am[:m] # m+1-1 = m
 
         # need to perform padding
         elif len(lm) < m + 1:
             to_add = m+1-len(lm)
+            # print(m, to_add, len([0 for _ in range(to_add)]), res, lm)
             lm = lm + [G for _ in range(to_add)]
-            res = res + [0 for _ in range(to_add)]
+            res = res + [0 for _ in range(to_add-1)]
             am  = am + [0 for _ in range(to_add-1)]
 
         labels = torch.Tensor(lm[1:]).long()
         if upto_id < m:
             labels[upto_id:] = -100
+        lm = torch.Tensor(lm[:-1]).long()[:m]
+        am = torch.Tensor(am).long()[:m]
+        val_target = torch.Tensor(res).float()[:m]
+            
+        assert len(labels) == m, f"len-->{labels.size()}, {i}"
+        assert len(lm) == m, f"len-->{lm.size()}, {i}"
+        assert len(am) == m, f"len-->{am.size()}, {i}"
+        assert len(val_target) == m, f"len-->{val_target.size()}, {i}"
 
         return {
-            "input_ids": torch.Tensor(lm[:-1]).long(),
-            "attention_mask": torch.Tensor(am).long(),
-            "value_targets": torch.Tensor(res)[:-1].float(),
+            "input_ids": lm,
+            "attention_mask": am,
+            "value_targets": val_target,
             "labels": labels
         }
 
-
 def get_datasets_full_game(config, split):
     # same as get_datasets but for FullGame
+    with open(config.m2id, "r") as m:
+        m2id = json.load(m)
+        if "[GAME]" not in m2id:  # only if not found
+            GAME = len(m2id)
+            m2id["[GAME]"] = GAME  # new game flag
+        else:
+            GAME = m2id["[GAME]"]
+    
     st = time.time()
-    with open(config.pkl_path, "rb") as f:
-        clm = pickle.load(f)
-
+    print(":: Starting Loading")
+    
+    clm = np.load("data/clm.npz")
     lms = clm["lms"]
     results = clm["res"]
-    print(f"Pickle Loading took: {time.time()-st}s")
-
+    split_idx = np.argwhere(lms.flatten() == 0.0).flatten()[1:]
+    lms_split = np.split(lms.flatten(), split_idx)
+    res_split = np.split(results.flatten(), split_idx)
+    print(f"Numpy Loading took: {time.time()-st}s")
+    
     test_idx = int(split * lms.shape[0])
-    ds_train = FullGameLoadedDataset(config, lms[test_idx:], results[test_idx:])
-    ds_test = FullGameLoadedDataset(config, lms[:test_idx], results[:test_idx])
+    ds_train = FullGameLoadedDataset(config, lms_split[test_idx:], res_split[test_idx:], m2id)
+    ds_test = FullGameLoadedDataset(config, lms_split[:test_idx], res_split[:test_idx], m2id)
     return ds_train, ds_test
 
 
