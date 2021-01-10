@@ -570,7 +570,8 @@ class Trainer:
             # ------------- LR SCHEDULING
             elif scheduler == "GPT3":
                 # update learning rate
-                processed_tokens += d["input_ids"].size(0) * model_config.n_ctx # batch_size * number of tokens in each sequence
+                # number of processed tokens now are the actual number of tokens processed and not just len*batch_size
+                processed_tokens += (d["input_ids"] >= 0).sum()
                 if processed_tokens < config.warmup_tokens:
                     # linear warmup
                     lr_mult = float(processed_tokens) / float(max(1, config.warmup_tokens))
