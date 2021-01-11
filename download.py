@@ -425,31 +425,56 @@ elif sys.argv[1] == "-p":
 
 elif sys.argv[1] == "-m":
     # merge files and split into testing and training
-    all_files = glob("./data/*.p")
-     
+    all_files = [x for x in glob("./data/chess_lm*.p")]
+    print("Found", len(all_files), "files!")
+
     # we create exhaustive list, this will also help in determining the dataloading procedure to use
     all_sequences = []
     all_results = []
-    
+
     # now we open files one by one
-    total_moves = 0
-    for name in all_files:
-        print("Reading files...", name)
+    total_moves = []
+    print(":::::: First Pass ::::::")
+    for i, name in enumerate(all_files):
+        print("Reading file...", name)
         with open(name, "rb") as p:
             data = pickle.load(p)
             lm = data["lms"]
             res = data["res"]
             # uncomment below to see the number of moves
-            total_moves += sum([len(x) for x in lm])
+            total_moves.append(sum([len(x) for x in lm]))
             all_sequences.extend(lm)
             all_results.extend(res)
+        print(f"Total Games: {len(all_sequences)}; Moves: {sum(total_moves)}")
+        print("-"*80)
+        
+        if i and i % 10 == 0:
+            print(f"Writing ---> data/all_target_{i}.p")
+            with open(f"data/all_target_{i}.p", "wb") as p:
+                pickle.dump({"lms":all_sequences, "res":all_results}, p)
+            all_sequences = []
+            all_results = []
+            total_moves = []
 
-    print("============= Total Games:", len(all_sequences))
-    print("============= Total Moves:", total_moves)
+    # second pass to merge even more
+    print(":::::: Second Pass ::::::")
+    all_files = [x for x in glob("./data/all_target*.p")]
+    for i, name in enumerate(all_files):
+        print("Reading file...", name)
+        with open(name, "rb") as p:
+            data = pickle.load(p)
+            lm = data["lms"]
+            res = data["res"]
+            # uncomment below to see the number of moves
+            total_moves.append(sum([len(x) for x in lm]))
+            all_sequences.extend(lm)
+            all_results.extend(res)
+    
+    print(":: total games:", len(all_sequences), "total_moves:", sum(total_moves))
 
-    print("Writing ---> data/all_target.p")
-    with open("data/all_target.p", "wb") as p:
-        p.dump({"lms":all_sequences, "res":all_results}, p)
+    print("Writing ---> data/final.p")
+    with open("data/final.p", "wb") as p:
+        pickle.dump({"lms":all_sequences, "res":all_results}, p)
 
 
 elif sys.argv[1] == "-c":
