@@ -134,7 +134,6 @@ class ValueHead(nn.Module):
         self.ln2 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
         self.attn2 = Attention(config.n_embd, config.n_ctx, config, scale=True)
         self.ln3 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
-        self.act_mid = nn.ReLU()
 
         # final head
         if config.loss_method == "mse":
@@ -219,7 +218,7 @@ class BetaChessForFullGameSequence(nn.Module):
         self.policy_head = PolicyHead(config)
         self.value_head = ValueHead(config)
 
-    def forward(self, input_ids, attention_mask, value_targets = None, labels = None, loss = None):
+    def forward(self, input_ids, labels_mask=None, attention_mask=None, value_targets=None, labels=None, loss=None):
         x = self.body(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -230,11 +229,14 @@ class BetaChessForFullGameSequence(nn.Module):
         out = (logits, values)
 
         if labels is not None and value_targets is not None:
+            if labels_mask is not None:
+                # mask illegal moves
+                logits = labels_mask + logits
 
             # categorical cross entropy
             logits_reshape = logits.contiguous().view(-1, logits.size(-1))
             policy_targets = labels.contiguous().view(-1)
-            non_pad_idx = policy_targets != -100.
+            non_pad_idx = policy_targets > 0
             # print(non_pad_idx)
             loss_policy = F.cross_entropy(logits_reshape[non_pad_idx], policy_targets[non_pad_idx])
 
