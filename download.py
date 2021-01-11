@@ -129,7 +129,7 @@ def parse_and_save_data(files, save_after, pid, verbose = False):
                         cg = pgn.read_game(io.StringIO(gs))
                     except:
                         verbose_print(f"❌ could not load game #{cntr}", verbose = verbose)
-                
+                        continue
                 cntr += 1 # update main counter
                 result = cg.headers["Result"]
                 if result != "*":
@@ -173,7 +173,72 @@ def parse_and_save_data(files, save_after, pid, verbose = False):
     verbose_print(f"Process: {pid} Done!", verbose = verbose)
 
 
-def leela_dataset_compiler(files, save_after, pid, verbose=False, _trange = False):
+def parse_and_save_data_2(files, save_after, pid, verbose = False):
+    """parse the pgn files and save the data after `save_after` no. of games have been processed,
+    There may have been a bug with the other one. Not sure if it was bug because of the function
+    or parsing.
+    """
+    print(":: Starting Process:", pid)
+    seqs = []
+    rseq = []
+    cntr = 0
+    fcntr = 0
+    game_count = 0
+    game_count_loaded = 0
+    for i in range(len(files)):
+        fpath = files[i]
+        with open(fpath, 'r', encoding = "latin") as f:
+            games = f.read()
+        games2 = re.sub(r"\[.*\]\s", "", games)
+        game_strings = games2.split("\n\n")
+        game_strings = [re.sub(r"\n", " ", gs) for gs in game_strings]
+        game_count += len(game_strings)
+        
+        for gs in game_strings:
+            try:
+                cntr = 0
+                gs = gs.strip()
+                try:
+                    cg = pgn.read_game(io.StringIO(gs.decode("utf-8")))
+                except:
+                    try:
+                        cg = pgn.read_game(io.StringIO(gs))
+                    except:
+                        print(f"❌ could not load game #{cntr}", verbose = verbose)
+                        continue
+                res = cg.headers["Result"]
+                if res != "*":
+                    cntr += 1 # update main counter
+                    seq = [m2id[str(x.move)[:4]] for x in cg.mainline()]
+                    seqs.append(seq)
+                    rseq.append(results[res])
+            except Exception as e:
+                print(f"↗️ Can't open because: {e}")
+                continue
+
+            if cntr % save_after == 0:
+                pkl_file = f"data/chess_lm_{fcntr}_{pid}.p"
+                with open(pkl_file, "wb") as p:
+                    print("Saving File...", pkl_file)
+                    pickle.dump({"lms": seqs, "res": rseq}, p)
+
+                game_count_loaded += len(seqs)
+                seqs = []
+                rseq = []
+                fcntr += 1
+
+    if len(seqs):
+        pkl_file = f"data/chess_lm_{fcntr}_{pid}.p"
+        with open(pkl_file, "wb") as p:
+            print("Saving File...", pkl_file)
+            pickle.dump({"lms": seqs, "res": rseq}, p)
+        game_count_loaded += len(seqs)
+        
+    print(f"Process: {pid} Done!")
+
+
+
+def leela_dataset_compiler(files, save_after, pid, save_legal_mask=False, verbose=False, _trange = False):
     """parse the pgn files and save the data after `save_after` no. of games have been processed.
     This function is specifically built to parse leelachess self play games. which have the following
     format:
@@ -205,20 +270,25 @@ def leela_dataset_compiler(files, save_after, pid, verbose=False, _trange = Fals
 
         # now convert this game to out moves and create legal masking
         seq = []
-        legal_mask = []
-        # b = chess.Board()
-        for x in cg.mainline():
-            mv = m2id[str(x.move)[:4]]
-            # b.push(x.move)
+        if save_legal_mask:
+            legal_mask = []
+            b = chess.Board()
+            for x in cg.mainline():
+                mv = m2id[str(x.move)[:4]]
+                b.push(x.move)
 
-            # store data in bool to save memory (1793 bytes vs 14344 bytes) use array.nbytes
-            # using bitarray is even smaller (just 239 bytes) but it does not work on vast.ai's
-            # Docker python
-            # legal = np.zeros(shape=(len(m2id))).astype(np.bool)
-            # legal[[m2id[str(x)[:4]] for x in b.legal_moves]] = True
+                # store data in bool to save memory (1793 bytes vs 14344 bytes) use array.nbytes
+                # using bitarray is even smaller (just 239 bytes) but it does not work on vast.ai's
+                # Docker python
+                legal = np.zeros(shape=(len(m2id))).astype(np.bool)
+                legal[[m2id[str(x)[:4]] for x in b.legal_moves]] = True
 
-            seq.append(mv)
-            # legal_mask.append(legal)
+                seq.append(mv)
+                legal_mask.append(legal)
+        
+        else:
+            # can optimise code here
+            seq = [m2id[str(x.move)[:4]] for x in cg.mainline()]
 
         # add to master 
         rseq.append(res)
@@ -262,7 +332,7 @@ def multiprocessing_parsing_wrapper(files, save_after, leela = False):
         i = i % WORKERS # to put in proper bucket
         files_bkts[i].append(f)
 
-    func = parse_and_save_data if not leela else leela_dataset_compiler
+    func = parse_and_save_data_2 if not leela else leela_dataset_compiler
     for pid in range(WORKERS):
         process_list.append(multiprocessing.Process(
             target = func,
@@ -355,17 +425,7 @@ elif sys.argv[1] == "-p":
 
 elif sys.argv[1] == "-m":
     # merge files and split into testing and training
-    all_files = glob("./data/*.txt")
-    by_order = {}
-    for f in all_files:
-        name = "".join(re.findall("\d+_\d+", f))
-        if not name:
-            continue
-        mode = "res" if "res" in f else "lm"
-        if name not in by_order:
-            by_order[name] = {mode: f}
-        else:
-            by_order[name].update({mode: f})
+    all_files = glob("./data/*.p")
      
     # we create exhaustive list, this will also help in determining the dataloading procedure to use
     all_sequences = []
@@ -373,23 +433,23 @@ elif sys.argv[1] == "-m":
     
     # now we open files one by one
     total_moves = 0
-    for name in by_order:
+    for name in all_files:
         print("Reading files...", name)
-        with open(by_order[name]["lm"], "r") as lm, open(by_order[name]["res"], "r") as res:
-            lm = lm.read()
-            res = res.read().split("\n")
+        with open(name, "rb") as p:
+            data = pickle.load(p)
+            lm = data["lms"]
+            res = data["res"]
             # uncomment below to see the number of moves
-            # total_moves += len(re.findall("\s", lm)) - len(res)
-            all_sequences.extend(lm.split("\n"))
+            total_moves += sum([len(x) for x in lm])
+            all_sequences.extend(lm)
             all_results.extend(res)
 
     print("============= Total Games:", len(all_sequences))
     print("============= Total Moves:", total_moves)
 
-    print("Writing ---> data/all_lm.txt, data/all_res.txt")
-    with open("data/all_lm.txt", "w") as train_lm, open("data/all_res.txt", "w") as train_res:
-        train_lm.write("\n".join(all_sequences))
-        train_res.write("\n".join(all_results))
+    print("Writing ---> data/all_target.p")
+    with open("data/all_target.p", "wb") as p:
+        p.dump({"lms":all_sequences, "res":all_results}, p)
 
 
 elif sys.argv[1] == "-c":

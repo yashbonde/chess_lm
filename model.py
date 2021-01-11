@@ -834,6 +834,8 @@ class FullGameLoadedDataset(Dataset):
         self.lms = lms
         self.res = results
         self.m2id = m2id
+        self.id2m = {v:k for k,v in self.m2id.items()}
+        self.mask_size = len(self.m2id)
         self.shuffle = True
 
         with open(config.m2id, "r") as m:
@@ -843,35 +845,63 @@ class FullGameLoadedDataset(Dataset):
                 m2id["[GAME]"] = GAME  # new game flag
             else:
                 GAME = m2id["[GAME]"]
+
+            if "[END_GAME]" not in m2id:  # only if not found
+                END_GAME = len(m2id)
+                m2id["[END_GAME]"] = END_GAME  # new game flag
+            else:
+                END_GAME = m2id["[END_GAME]"]
         
+        # add the game tag and the end game tag
         self.GAME = GAME
+        self.END_GAME = END_GAME
+        
+        print("GAME",self.GAME)
+        print("END_GAME",self.END_GAME)
+        
+        self.board = chess.Board()
 
     def __len__(self):
         return len(self.lms) #.shape[0]
+    
+    def get_move_mask(self, m, l):
+        self.board.reset()
+        for i,mv in enumerate(l[l>0]):
+            m[i][[self.m2id[str(x)[:4]] for x in self.board.legal_moves]] = 0
+            mid = self.id2m[mv.item()]
+            if mid == "[END_GAME]":
+                break
+            self.board.push(Move(mid))
+        return m
 
     def __getitem__(self, i):
+        self.board.reset() # inplace reset
         m = self.config.maxlen
         G = self.GAME
+        EG = self.END_GAME
         lm = self.lms[i]
+        if isinstance(lm, np.ndarray):
+            lm = lm.tolist()
+        if isinstance(lm, list):
+            lm = [G] + lm
         res = self.res[i]
-
-        # lm --> [G] + [m1, m2 ... mn] + [G]
-        lm = lm[1:] + [G]
-        lm = lm.tolist()
+        
+        # lm --> [G] + [m1, m2 ... mn] + [EG]
+        lm = lm + [EG]
         upto_id = len(lm)
 
         # get the targets for values as [res,-res,res,-res...]
-        if isinstance(res, (float, int)):
+        if isinstance(res, (float, int, str)):
             game_res = float(res)
             res = np.ones(len(lm)) * game_res
             res[2:len(lm):2] = -game_res
             res[[0, -1]] = 0 # first and last tag [GAME] has to predict 0
             res = res.tolist()
         else:
-            res = res.tolist()[1:] # move results by one
+            res = res.tolist()
 
         # create the attention mask
-        am = [1 for _ in range(len(lm))] # attention mask
+        am = [1 for _ in range(len(lm)-1)] # attention mask
 
         # now handle smaller longer sequences
         if len(lm) > m + 1:
@@ -884,26 +914,34 @@ class FullGameLoadedDataset(Dataset):
             to_add = m+1-len(lm)
             # print(m, to_add, len([0 for _ in range(to_add)]), res, lm)
             lm = lm + [G for _ in range(to_add)]
-            res = res + [0 for _ in range(to_add-1)]
-            am  = am + [0 for _ in range(to_add-1)]
+            res = res + [0 for _ in range(to_add)]
+            am  = am + [0 for _ in range(to_add)]
 
-        labels = torch.Tensor(lm[1:]).long()
-        if upto_id < m:
-            labels[upto_id:] = -100
-        lm = torch.Tensor(lm[:-1]).long()[:m]
         am = torch.Tensor(am).long()[:m]
         val_target = torch.Tensor(res).float()[:m]
-            
+        labels = torch.Tensor(lm[1:]).long()
+        if upto_id < m:
+            labels[upto_id-1:] = -100
+        lm = torch.Tensor(lm[:-1]).long()[:m]
+        
+        # we do not want the model to learn all combination over all the possible moves
+        # just the moves that are legal. So we perform masking, this is done on the lines
+        # of AlphaZero which does recieve move mask as a part of the board state
+        labels_mask = torch.ones(len(lm), self.mask_size) * -1e8
+        labels_mask = self.get_move_mask(labels_mask, labels)
+
         assert len(labels) == m, f"len-->{labels.size()}, {i}"
         assert len(lm) == m, f"len-->{lm.size()}, {i}"
         assert len(am) == m, f"len-->{am.size()}, {i}"
         assert len(val_target) == m, f"len-->{val_target.size()}, {i}"
+        assert len(labels_mask) == m, f"len-->{labels_mask.size()}, {i}"
 
         return {
             "input_ids": lm,
             "attention_mask": am,
             "value_targets": val_target,
-            "labels": labels
+            "labels": labels,
+            "labels_mask": labels_mask
         }
 
 def get_datasets_full_game(config, split):
