@@ -62,11 +62,11 @@ model_path = os.path.join(model_folder, args.name + ".pt")
 set_seed(4)
 
 if args.lmtrain[-4:] == "hdf5":
-    print("Using HDF5 data")
+    print(":: Using HDF5 data")
     assert args.maxlen % 85 == 0, "using hdf5 means maxlen % 85 == 0"
     
 elif args.lmtrain[-3:] == "npz":
-    print("Using numpy zips")
+    print(":: Using numpy zips")
     assert args.maxlen % 85 == 0, "using numpy means maxlen % 85 == 0"
 
 # There are three different datamodels as mentioned above

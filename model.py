@@ -5,6 +5,7 @@ import json
 import time
 import math
 import wandb
+import chess
 import pickle
 import random
 import numpy as np
@@ -14,7 +15,6 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import IterableDataset, DataLoader, Dataset
-from torch.utils.tensorboard import SummaryWriter
 
 from transformers import PretrainedConfig
 from transformers import GPT2Model
@@ -312,7 +312,7 @@ class ModelConfig(PretrainedConfig):
             ]) + "\n"
 
 
-class TinyConfig(PretrainedConfig):    
+class TinyConfig(PretrainedConfig):
     def __init__(self, n_positions, n_ctx, **kwargs):
         self.n_positions = n_positions
         self.n_ctx = n_ctx
@@ -711,7 +711,13 @@ class TrainerConfig:
 
         if self.warmup_tokens == None:
             # total tokens // (batch_size * 170)
-            self.final_tokens = 613256130  # total size of all the tokens
+            # this is the final tokens you get when you train full game dataset on batch size 40
+            # and 170 tokens in each sequence
+            self.final_tokens = 185132*40*170  # total size of all the tokens
+            
+            # this is the final tokens you get when you train on GPT style block
+            # self.final_tokens = 613256130  # total size of all the tokens
+
             self.warmup_tokens = int(self.final_tokens * self.warmup_perc)
             print("Auto Setting warmup_tokens using", self.warmup_perc, "to", self.warmup_tokens)
 
@@ -761,7 +767,7 @@ def get_datasets(config, split):
             m2id["[GAME]"] = GAME  # new game flag
         else:
             GAME = m2id["[GAME]"]
-    
+
     # init position IDs with None
     pos = None
     if config.lm[-4:] == "hdf5":
@@ -853,19 +859,19 @@ class FullGameLoadedDataset(Dataset):
                 m2id["[END_GAME]"] = END_GAME  # new game flag
             else:
                 END_GAME = m2id["[END_GAME]"]
-        
+
         # add the game tag and the end game tag
         self.GAME = GAME
         self.END_GAME = END_GAME
-        
-        print("GAME",self.GAME)
-        print("END_GAME",self.END_GAME)
-        
+
+        # print("GAME",self.GAME)
+        # print("END_GAME",self.END_GAME)
+
         self.board = chess.Board()
 
     def __len__(self):
         return len(self.lms) #.shape[0]
-    
+
     def get_move_mask(self, m, l):
         self.board.reset()
         for i,mv in enumerate(l[l>0]):
@@ -878,6 +884,7 @@ class FullGameLoadedDataset(Dataset):
 
     def __getitem__(self, i):
         self.board.reset() # inplace reset
+        config = self.config
         m = self.config.maxlen
         G = self.GAME
         EG = self.END_GAME
@@ -887,7 +894,7 @@ class FullGameLoadedDataset(Dataset):
         if isinstance(lm, list):
             lm = [G] + lm
         res = self.res[i]
-        
+
         # lm --> [G] + [m1, m2 ... mn] + [EG]
         lm = lm + [EG]
         upto_id = len(lm)
@@ -925,7 +932,8 @@ class FullGameLoadedDataset(Dataset):
         if upto_id < m:
             labels[upto_id-1:] = -100
         lm = torch.Tensor(lm[:-1]).long()[:m]
-        
+
+        # if config.ret_legal_mask: # always return
         # we do not want the model to learn all combination over all the possible moves
         # just the moves that are legal. So we perform masking, this is done on the lines
         # of AlphaZero which does recieve move mask as a part of the board state
@@ -955,19 +963,27 @@ def get_datasets_full_game(config, split):
             m2id["[GAME]"] = GAME  # new game flag
         else:
             GAME = m2id["[GAME]"]
-    
+
     st = time.time()
     print(":: Starting Loading")
-    
-    clm = np.load("data/clm.npz")
-    lms = clm["lms"]
-    results = clm["res"]
-    split_idx = np.argwhere(lms.flatten() == 0.0).flatten()[1:]
-    lms_split = np.split(lms.flatten(), split_idx)
-    res_split = np.split(results.flatten(), split_idx)
-    print(f"Numpy Loading took: {time.time()-st}s")
-    
-    test_idx = int(split * lms.shape[0])
+
+    if config.lm_train[-3:] == "npz":
+        clm = np.load("data/clm.npz")
+        lms = clm["lms"]
+        results = clm["res"]
+        split_idx = np.argwhere(lms.flatten() == 0.0).flatten()[1:]
+        lms_split = np.split(lms.flatten(), split_idx)
+        res_split = np.split(results.flatten(), split_idx)
+        print(f"Numpy Loading took: {time.time()-st}s")
+
+    if config.lm_train[-2:] == ".p":
+        with open("data/final.p", "r") as p:
+            data = pickle.load(p)
+            lms_split = data["lms"]
+            res_split = data["res"]
+        print(f"Pickle Loading took: {time.time()-st}s")
+
+    test_idx = int(split * lms_split.shape[0])
     ds_train = FullGameLoadedDataset(config, lms_split[test_idx:], res_split[test_idx:], m2id)
     ds_test = FullGameLoadedDataset(config, lms_split[:test_idx], res_split[:test_idx], m2id)
     return ds_train, ds_test
@@ -1111,6 +1127,7 @@ class DataConfig:
     m2id = None
     maxlen = None
     buffer= None
+    ret_legal_mask=True
 
     def __init__(self, **kwargs):
         self.attrs = ["lm", "rf", "m2id", "maxlen", "buffer"]
