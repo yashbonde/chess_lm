@@ -205,8 +205,11 @@ class Node():
         value = self.action_value + self.p * const
         return value
 
-    def get_action_value_with_exploration(self):
-        return self.action_value + 5 * self.p * np.sqrt(self.nsb) / (1+self.n)
+    def get_action_value_with_exploration(self, noise = None):
+        p = self.p
+        if noise:
+            p = self.p * 0.75 + noise * 0.25
+        return self.action_value + 5 * p * np.sqrt(self.nsb) / (1+self.n)
 
     @property
     def terminal(self):
@@ -400,13 +403,22 @@ def expand_tree(model, root_node, b, depth, vocab, inv_vocab, nodes_taken):
 
     # SELECTION
     # step 3: select the best move
-    action_values = np.asarray([x.get_action_value_with_exploration() for x in root_node.children]) # a = q + u
     if root_node.is_root:
         # From Paper: Dirichlet noise Dir(α) was added to the prior probabilities in the root node;
         # this was scaled in inverse proportion to the approximate number of legal moves in a typical position
-        dirchlet_noise =  np.random.dirichlet(np.ones_like(action_values) * 0.3) # Dir(a)
+        dirchlet_noise =  np.random.dirichlet(np.ones(len(root_node.children)) * 0.3) # Dir(a)
         # dirchlet_noise = dirchlet_noise ** (1/len(legal_moves))
-        action_values = 0.75 * action_values + 0.25 * dirchlet_noise
+
+        # the dirchlet noise is supposed to be added to the probability of each root node and thus was being
+        # done incorrectly when we were adding it to the action values
+        # action_values = 0.75 * action_values + 0.25 * dirchlet_noise
+        # so instead during the calculation we pass it a noise value that helps it to visits once
+        action_values = np.asarray([
+            x.get_action_value_with_exploration(n)
+            for x,n in zip(root_node.children, dirchlet_noise)
+        ])
+    else:
+        action_values = np.asarray([x.get_action_value_with_exploration() for x in root_node.children]) # a = q + u
     child_node = root_node.children[np.argsort(action_values)[-1]] # chose the action with highest state action value
     nodes_taken.append(child_node)
     # now we have the best move so push this to the board
