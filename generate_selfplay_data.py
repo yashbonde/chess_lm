@@ -24,7 +24,7 @@ from types import SimpleNamespace
 from argparse import ArgumentParser
 
 from game import self_play_one_game, verbose_print
-from model import ModelConfig, BetaChess, FullDatasetPreLoaded, configure_optimizers
+from model import ModelConfig, BetaChess, FullDatasetPreLoaded, configure_optimizers, set_seed
 
 import torch
 import torch.nn.functional as F
@@ -354,17 +354,19 @@ class SelfPlayManager:
                 # _m1 is champion and _m2 is a contestent this is why always train the
                 # contestent. For this we need to define the lms and results array for
                 # training
-                buffer = np.array([(x.move_id, x.value) for x in self.buffer])
-                lms, results = buffer[:, 0], buffer[:, 1]
-                upto_idx = -(len(lms) % self.model_config.n_ctx)
-                lms = np.array(lms[:upto_idx]).reshape(-1, self.model_config.n_ctx)
-                results = np.array(results[:upto_idx]).reshape(-1, self.model_config.n_ctx)
-                verbose_print("lms:", lms.shape,";Results:", results.shape, verbose = self.verbose)
-                self.trainer.train(lms, results, self._m2)
+                if config.n_data_collection_games:
+                    buffer = np.array([(x.move_id, x.value) for x in self.buffer])
+                    lms, results = buffer[:, 0], buffer[:, 1]
+                    upto_idx = -(len(lms) % self.model_config.n_ctx)
+                    lms = np.array(lms[:upto_idx]).reshape(-1, self.model_config.n_ctx)
+                    results = np.array(results[:upto_idx]).reshape(-1, self.model_config.n_ctx)
+                    verbose_print("lms:", lms.shape,";Results:", results.shape, verbose = self.verbose)
+                    self.trainer.train(lms, results, self._m2)
 
                 # step 3 EVALUAION: evaluate the model with current best model
                 # if the contestent is better than champion
                 verbose_print("Perform the tournament of the models", verbose=self.verbose)
+                self._m1.eval()
                 self._m2.eval()
                 new_model_win = 0
                 num_draws = 0
@@ -443,32 +445,39 @@ if __name__ == "__main__":
         "file and update BUCKET_NAME. Happy Hunting!"
     )
     args.add_argument("--best_model_path", type=str, required = True, help="path to checkpoint file to best model")
-    args.add_argument("--arch", type=str, choices=["tiny", "medium"], default = "tiny", help="architecture")
+    args.add_argument("--arch", type=str, choices=["tiny", "m1", "m2"], default = "m2", help="architecture")
     args.add_argument("--m2id", type=str, default = "assets/moves.json", help="path to move_to_id json")
     args.add_argument("--max_moves", type=int, default = 100, help="number of moves to play in the game")
-    args.add_argument("--depth", type=int, default = 5, help="max tree depth in recursion for MCTS")
-    args.add_argument("--sims", type=int, default = 100, help="number of simulations to perform for each move")
+    args.add_argument("--depth", type=int, default = 60, help="max tree depth in recursion for MCTS")
+    args.add_argument("--sims", type=int, default = 200, help="number of simulations to perform for each move")
     args.add_argument("--buffer_size", type=int, default = int(1e9), help="total training buffer size")
-    args.add_argument("--n_data_collection_games", type=int, default = 100, help="total games to perform in each training loop for data collection")
+    args.add_argument("--n_data_collection_games", type=int, default = 0, help="total games to perform in each training loop for data collection")
     args.add_argument("--n_evaluation_games", type=int, default = 4, help="number of games for evaluation")
+    args.add_argument("--seed", type=int, default = 4, help="seed value")
     args = args.parse_args()
+    
+    # set_seed()
 
     # load vocab
     with open(args.m2id, "r") as f:
         vocab = json.load(f)
         inv_vocab = {v:k for k,v in vocab.items()}
 
-    if argts.arch == "tiny":
+    if args.arch == "tiny":
         n_embd = 128
         n_layer = 8
         n_head = 8
-    else: # medium
+    elif args.arch == "m2":
+        n_embd = 240
+        n_layer = 12
+        n_head = 12
+    elif args.arch == "m1": # medium
         n_embd = 200
         n_layer = 10
         n_head = 10
 
     best_model_config = ModelConfig(
-        vocab_size=len(vocab),
+        vocab_size=len(vocab)-1,
         n_positions=85*2,
         n_ctx=85*2,
         n_embd=n_embd,

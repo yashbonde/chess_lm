@@ -19,7 +19,7 @@ Train a GPT2 model to play chess on moves only. There are two different models w
 """.split())
 
 # data args
-args.add_argument("--lmtrain", type=str, default = "data/clm.npz", help="path to train_lm file")
+args.add_argument("--lmtrain", type=str, default = "data/final.p", help="path to train_lm file")
 args.add_argument("--res", type=str, default = "data/all_res.txt", help="path to res file")
 args.add_argument("--m2id", type=str, default = "assets/moves.json", help="path to move_to_id json")
 
@@ -34,7 +34,7 @@ args.add_argument("--model", type = str, default = "beta_full", help = "which mo
 args.add_argument("--use_drop", type = bool, default = False, help = "set `True` to use dropout wuith value 0.1")
 
 # optim settings
-args.add_argument("--lr", type = float, default = 1e-4, help = "learning rate")
+args.add_argument("--lr", type = float, default = 6e-4, help = "learning rate")
 args.add_argument("--beta1", type = int, default = 0.9, help = "Adam.beta1") # momentum for first gradient
 args.add_argument("--beta2", type = int, default = 0.95, help = "Adam.beta2") # momentum for second moment (var)
 
@@ -49,7 +49,7 @@ args.add_argument("--warmup_perc", type=float, default=0.2, help="weight decay v
 args.add_argument("--weight_decay", type=float, default=0.1, help="weight decay value for L2 reg.")
 args.add_argument("--save_folder", type=str, default="models", help="Folder to save model to")
 args.add_argument("--name", type=str, default="cgpt", help="Saved name to have filepath `<name>.pt`")
-args.add_argument("--test_every", type=int, default=10000, help="Test after these global steps")
+args.add_argument("--test_every", type=int, default=6000, help="Test after these global steps")
 args.add_argument("--patience", type=int, default=1, help="Early stopping partience value")
 args = args.parse_args()
 
@@ -136,11 +136,11 @@ trainerConf = TrainerConfig(
     
     # get 19305 batches with batch size = 185 with 170 tokens
     # final_tokens = total_batches * batch_size * toks in each batch size
-#     final_tokens = 19305 * 185 * 170, # value at which the lr goes to 10% of original
-#     warmup_tokens = 19305 * 185 * 170, # 10 % of the steps are warmup steps
+    # final_tokens = 19305 * 185 * 170, # value at which the lr goes to 10% of original
+    # warmup_tokens = 19305 * 185 * 170, # 10 % of the steps are warmup steps
     
     # n_layer = 10 and bactch_size = 150 gives 23809 steps
-#     final_tokens = 23809 * 150 * 170,
+    # final_tokens = 23809 * 150 * 170,
 )
 trainer = Trainer(model, dstrain, trainerConf, dstest)
 print(trainerConf)

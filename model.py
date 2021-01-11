@@ -28,6 +28,12 @@ def set_seed(seed):
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
 
+        
+def Move(x):
+    # get chess.Move object and force promote to queen
+    if not x[-1].isdigit():
+        x = x[:-1] + "q"
+    return chess.Move.from_uci(x)
 
 ################################################
 ####### Model ##################################
@@ -217,7 +223,6 @@ class BetaChessForFullGameSequence(nn.Module):
         # the policy head and value head are now similar to what is in AlphaZero
         self.policy_head = PolicyHead(config)
         self.value_head = ValueHead(config)
-
     def forward(self, input_ids, labels_mask=None, attention_mask=None, value_targets=None, labels=None, loss=None):
         x = self.body(
             input_ids=input_ids,
@@ -239,6 +244,8 @@ class BetaChessForFullGameSequence(nn.Module):
             non_pad_idx = policy_targets > 0
             # print(non_pad_idx)
             loss_policy = F.cross_entropy(logits_reshape[non_pad_idx], policy_targets[non_pad_idx])
+#             log_softmax = F.softmax(logits, dim = -1).log()
+#             loss_policy = F.nll_loss(log_softmax[non_pad_idx], policy_targets[non_pad_idx])
 
             # MSE loss
             values_reshape = F.tanh(values).contiguous().view(-1)
@@ -713,12 +720,12 @@ class TrainerConfig:
             # total tokens // (batch_size * 170)
             # this is the final tokens you get when you train full game dataset on batch size 40
             # and 170 tokens in each sequence
-            self.final_tokens = 185132*40*170  # total size of all the tokens
+            self.final_tokens = 185132*40*180*self.num_epochs  # total size of all the tokens
             
             # this is the final tokens you get when you train on GPT style block
             # self.final_tokens = 613256130  # total size of all the tokens
 
-            self.warmup_tokens = int(self.final_tokens * self.warmup_perc)
+            self.warmup_tokens = int(self.final_tokens * self.warmup_perc/self.num_epochs)
             print("Auto Setting warmup_tokens using", self.warmup_perc, "to", self.warmup_tokens)
 
         elif self.scheduler == "GPT3":
@@ -937,21 +944,24 @@ class FullGameLoadedDataset(Dataset):
         # we do not want the model to learn all combination over all the possible moves
         # just the moves that are legal. So we perform masking, this is done on the lines
         # of AlphaZero which does recieve move mask as a part of the board state
-        labels_mask = torch.ones(len(lm), self.mask_size) * -1e8
-        labels_mask = self.get_move_mask(labels_mask, labels)
+#         try:
+#             labels_mask = torch.ones(len(lm), self.mask_size) * -1e8
+#             labels_mask = self.get_move_mask(labels_mask, labels).float()
+#         except:
+#             labels_mask = torch.ones(len(lm), self.mask_size).float()
 
         assert len(labels) == m, f"len-->{labels.size()}, {i}"
         assert len(lm) == m, f"len-->{lm.size()}, {i}"
         assert len(am) == m, f"len-->{am.size()}, {i}"
         assert len(val_target) == m, f"len-->{val_target.size()}, {i}"
-        assert len(labels_mask) == m, f"len-->{labels_mask.size()}, {i}"
+#         assert len(labels_mask) == m, f"len-->{labels_mask.size()}, {i}"
 
         return {
             "input_ids": lm,
             "attention_mask": am,
             "value_targets": val_target,
             "labels": labels,
-            "labels_mask": labels_mask
+#             "labels_mask": labels_mask
         }
 
 def get_datasets_full_game(config, split):
@@ -967,7 +977,7 @@ def get_datasets_full_game(config, split):
     st = time.time()
     print(":: Starting Loading")
 
-    if config.lm_train[-3:] == "npz":
+    if config.lm[-3:] == "npz":
         clm = np.load("data/clm.npz")
         lms = clm["lms"]
         results = clm["res"]
@@ -976,14 +986,14 @@ def get_datasets_full_game(config, split):
         res_split = np.split(results.flatten(), split_idx)
         print(f"Numpy Loading took: {time.time()-st}s")
 
-    if config.lm_train[-2:] == ".p":
-        with open("data/final.p", "r") as p:
+    if config.lm[-2:] == ".p":
+        with open("data/final.p", "rb") as p:
             data = pickle.load(p)
             lms_split = data["lms"]
             res_split = data["res"]
         print(f"Pickle Loading took: {time.time()-st}s")
 
-    test_idx = int(split * lms_split.shape[0])
+    test_idx = int(split * len(lms_split))
     ds_train = FullGameLoadedDataset(config, lms_split[test_idx:], res_split[test_idx:], m2id)
     ds_test = FullGameLoadedDataset(config, lms_split[:test_idx], res_split[:test_idx], m2id)
     return ds_train, ds_test

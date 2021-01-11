@@ -509,10 +509,10 @@ def self_play_one_game(
     pbar = trange(max_moves) if _trange_moves else range(max_moves)
     for mid in pbar:
         # get player color, first step is always white and then rest of the moves are alternate
-        col = "white" if (mid == 0) or ((mid + 1) % 2 == 0) else "black"
+        col = "white" if (mid % 2 == 0) else "black"
         model = m1 if col == "white" else m2 # get the player model
         b = game.board
-        verbose_print(b.fen(), verbose = verbose)
+        print("Inputs board for this move:", b.fen(), "; Playing color:", col)
 
         # now board is player till n_moves, root_node (k=0, s^0) = s_{n_moves}
         legal_moves = [vocab[str(x)[:4]] for x in b.legal_moves]
@@ -546,18 +546,18 @@ def self_play_one_game(
 
         # perform mcts and get the policy distribution
         mcts(model, root_node, b, depth, vocab, inv_vocab, sims = sims, _trange = _trange)
-        policy = select_action(root_node, t = 1) # larger temp, more variance
+        policy = select_action(root_node, t = 0.75) # larger temp, more variance
         action = Player.better_choice(legal_moves, policy, n = 1)[0]
         move = Move(inv_vocab[action])
-        verbose_print(policy, action, "--->", move, verbose = verbose)
+        print(policy, "--->", move, "; Evaluated", root_node.total_nodes, "positions!")
         done, res = game.step(move)
         end_value = 0.
         if done:
-            verbose_print(f"Game is over at step {mid + 1} and player color {col} --> {res}", verbose = verbose)
             if res == "win" and win_col == col: # when winning color is same as learning model
                 end_value = +1.
             elif res == "win" and win_col != col: # when winning color is opp to learning model
                 end_value = -1.
+            print(f"Game is over at step {mid + 1} and player color {col} --> {res} | res: {end_value}")
             break
 
     # add the last move taken in the buffer
