@@ -22,6 +22,7 @@ Train a GPT2 model to play chess on moves only. There are two different models w
 args.add_argument("--lmtrain", type=str, default = "data/final.p", help="path to train_lm file")
 args.add_argument("--res", type=str, default = "data/all_res.txt", help="path to res file")
 args.add_argument("--m2id", type=str, default = "assets/moves.json", help="path to move_to_id json")
+args.add_argument("--full_game", action="store_true", default = True, help="if the dataset to use is full_game")
 
 # model things
 args.add_argument("--maxlen", type = int, default = 85 * 2, help = "maximum length")
@@ -77,7 +78,7 @@ dataConfig = DataConfig(
     maxlen=args.maxlen,
     buffer=args.buffer,
 )
-if args.model == "beta_full":
+if args.full_game:
     # this is the case for a different model and so requires a different dataloader
     dstrain, dstest = get_datasets_full_game(dataConfig, args.split)
 else:
@@ -110,6 +111,9 @@ elif args.model == "base":
 elif args.model == "value":
     print(":: ValueOnlyNetwork")
     model = ValueOnlyNetwork(modelConfig)
+elif args.model == "policy":
+    print(":: PolicyOnlyNetwork")
+    model = PolicyOnlyNetwork(modelConfig)
 elif args.model == "beta_full":
     print(":: BetaChessForFullGameSequence")
     model = BetaChessForFullGameSequence(modelConfig)

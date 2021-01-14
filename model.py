@@ -223,7 +223,7 @@ class BetaChessForFullGameSequence(nn.Module):
         # the policy head and value head are now similar to what is in AlphaZero
         self.policy_head = PolicyHead(config)
         self.value_head = ValueHead(config)
-    def forward(self, input_ids, labels_mask=None, attention_mask=None, value_targets=None, labels=None, loss=None):
+    def forward(self,  input_ids, labels_mask=None, attention_mask=None, value_targets=None, labels=None, loss=None):
         x = self.body(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -242,10 +242,7 @@ class BetaChessForFullGameSequence(nn.Module):
             logits_reshape = logits.contiguous().view(-1, logits.size(-1))
             policy_targets = labels.contiguous().view(-1)
             non_pad_idx = policy_targets > 0
-            # print(non_pad_idx)
             loss_policy = F.cross_entropy(logits_reshape[non_pad_idx], policy_targets[non_pad_idx])
-#             log_softmax = F.softmax(logits, dim = -1).log()
-#             loss_policy = F.nll_loss(log_softmax[non_pad_idx], policy_targets[non_pad_idx])
 
             # MSE loss
             values_reshape = F.tanh(values).contiguous().view(-1)
@@ -257,10 +254,41 @@ class BetaChessForFullGameSequence(nn.Module):
         return out
 
 
+
+class PolicyOnlyNetwork(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+        # all layers are dedicated to learning the policy
+        self.gpt = GPT2Model(config)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size)
+
+    def forward(self, input_ids, attention_mask=None, labels=None, **kwargs):
+        x = self.gpt(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            return_dict=True
+        )
+        logits = self.lm_head(x.last_hidden_state)
+        out = (logits,)
+        if labels is not None:
+            # categorical cross entropy
+            logits_reshape = logits.contiguous().view(-1, logits.size(-1))
+            policy_targets = labels.contiguous().view(-1)
+            non_pad_idx = policy_targets > 0
+            loss_policy = F.cross_entropy(logits_reshape[non_pad_idx], policy_targets[non_pad_idx])
+            out = (logits, loss_policy,)
+        
+        return out
+
+
 class ValueOnlyNetwork(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
+        
+        # all the layers are dedicated to learning the value function
         self.gpt = GPT2Model(config)
 
         # final head
@@ -269,21 +297,28 @@ class ValueOnlyNetwork(nn.Module):
         elif config.loss_method == "ce":
             self.value_head = nn.Linear(config.n_embd, 3)
 
-    def forward(self, input_ids, value_targets = None, loss = None, **gptkwargs):
+    def forward(self, input_ids, value_targets = None, loss = None, labels = None, **gptkwargs):
         config = self.config
         x = self.gpt(input_ids, return_dict = True, **gptkwargs)
         values = self.value_head(x.last_hidden_state)
         out = (None, values)
-        if loss is not None and value_targets is not None:
+        if labels is not None and value_targets is not None:
+            non_pad_idx = labels.contiguous().view(-1) > 0
             if config.loss_method == "mse":
                 # MSE works best for value function
                 values = F.tanh(values)
-                loss_value = (values[:, :-1].contiguous().view(-1) - value_targets[:,1:].contiguous().view(-1)) ** 2
+                loss_value = F.mse_loss(
+                    value_targets[:, 1:].contiguous().view(-1)[non_pad_idx],
+                    values[:, :-1].contiguous().view(-1)[non_pad_idx]
+                )
                 loss_value = loss_value.mean()
 
             elif config.loss_method == "ce":
-                value_reshape = values[:, :-1].contiguous().view(-1, 3)
-                value_targets = value_targets[:, 1:].contiguous().view(-1) + 1 # [-1, 0, 1] --> [0, 1, 2]
+                # though I did come up with this myself, I later saw that this same method is
+                # used by LeelaChessZero. The idea is super simple you predict the class and
+                # at runtime multiply by [-1, 0, +1] and sum to get the value.
+                value_reshape = values[:, :-1].contiguous().view(-1, 3)[non_pad_idx]
+                value_targets = (value_targets[:, 1:].contiguous().view(-1) + 1)[non_pad_idx] # [-1, 0, 1] --> [0, 1, 2]
                 loss_value = F.cross_entropy(value_reshape, value_targets.long())
 
             loss = loss_value
