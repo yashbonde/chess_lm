@@ -469,11 +469,11 @@ class Trainer:
 
         # create step functions
         model.apply(init_weights)
-#         optimizer = torch.optim.Adam(
-#             model.parameters(),
-#             lr = config.lr,
-#             betas = config.betas
-#         )
+        # optimizer = torch.optim.Adam(
+        #     model.parameters(),
+        #     lr = config.lr,
+        #     betas = config.betas
+        # )
         optimizer = configure_optimizers(model, config) # get AdamW optimiser for this model
 
         # setup correct scheduler
@@ -810,6 +810,9 @@ def get_datasets(config, split):
         else:
             GAME = m2id["[GAME]"]
 
+    ds_train = None
+    ds_test = None
+
     # init position IDs with None
     pos = None
     if config.lm[-4:] == "hdf5":
@@ -868,7 +871,6 @@ def get_datasets(config, split):
         results = np.array(results[:-(len(results) % config.maxlen)]).reshape(-1, config.maxlen)
 
     print(f"Moves: {lms.shape}; Results: {results.shape}")
-
     test_idx = int(split * lms.shape[0])
     ds_train = FullDatasetPreLoaded(lms[test_idx:], results[test_idx:], m2id, pos)
     ds_test = FullDatasetPreLoaded(lms[:test_idx], results[:test_idx], m2id, pos)
@@ -979,24 +981,93 @@ class FullGameLoadedDataset(Dataset):
         # we do not want the model to learn all combination over all the possible moves
         # just the moves that are legal. So we perform masking, this is done on the lines
         # of AlphaZero which does recieve move mask as a part of the board state
-#         try:
-#             labels_mask = torch.ones(len(lm), self.mask_size) * -1e8
-#             labels_mask = self.get_move_mask(labels_mask, labels).float()
-#         except:
-#             labels_mask = torch.ones(len(lm), self.mask_size).float()
+        # try:
+        #     labels_mask = torch.ones(len(lm), self.mask_size) * -1e8
+        #     labels_mask = self.get_move_mask(labels_mask, labels).float()
+        # except:
+        #     labels_mask = torch.ones(len(lm), self.mask_size).float()
 
         assert len(labels) == m, f"len-->{labels.size()}, {i}"
         assert len(lm) == m, f"len-->{lm.size()}, {i}"
         assert len(am) == m, f"len-->{am.size()}, {i}"
         assert len(val_target) == m, f"len-->{val_target.size()}, {i}"
-#         assert len(labels_mask) == m, f"len-->{labels_mask.size()}, {i}"
+        # assert len(labels_mask) == m, f"len-->{labels_mask.size()}, {i}"
 
         return {
             "input_ids": lm,
             "attention_mask": am,
             "value_targets": val_target,
             "labels": labels,
-#             "labels_mask": labels_mask
+            # "labels_mask": labels_mask
+        }
+
+
+class PaddedHFDataset(Dataset):
+    def __init__(self, lms: list, results: list, m2id, maxlen: int, split: float, split_mode: str, **kwargs):
+        from datasets import load_dataset
+
+        self.lms = load_dataset(path="text", data_files=lms)["train"]
+        self.res = load_dataset(path="text", data_files=results)["train"]
+
+        # instead of actually splitting the datasets we can simply add an increment of start index
+        # for each of the split
+        if split_mode == "train":
+            self.train_split = True
+            self.incr = 0
+            self.size = int(len(self.lms)*split)
+        elif split_mode == "test":
+            self.train_split = False
+            self.incr = int(len(self.lms)*split)
+            self.size = len(self.lms) - self.incr
+        else:
+            raise ValueError("split_mode should be in `test` and `train`")
+
+        print(
+            f"train_split: {self.train_split} | total: {len(self.lms)} | incr: {self.incr} | size: {self.size}")
+
+        self.maxlen = maxlen
+        self.shuffle = True
+
+        if "[GAME]" not in m2id:  # only if not found
+            GAME = len(m2id)
+            m2id["[GAME]"] = GAME  # new game flag
+        else:
+            GAME = m2id["[GAME]"]
+
+        if "[END_GAME]" not in m2id:  # only if not found
+            END_GAME = len(m2id)
+            m2id["[END_GAME]"] = END_GAME  # end game flag
+        else:
+            END_GAME = m2id["[END_GAME]"]
+
+        # add the game tag and the end game tag
+        self.GAME = GAME
+        self.END_GAME = END_GAME
+
+    def __len__(self):
+        return self.size
+
+    def __getitem__(self, i):
+        i = i + self.incr  # for train self.incr = 0 so doesn't matter
+        lm = [self.GAME] + list(map(
+            lambda x: int(x.strip()), self.lms[i]["text"].split()
+        )) + [self.END_GAME]  # [X]
+        game_res = float(self.res[i]["text"])  # <float>
+        res = np.ones(len(lm)) * game_res  # [X]
+        res[2:len(lm):2] = -game_res
+        res[[0, -1]] = 0   # first and last tag [GAME] has to predict 0
+        res = res.tolist()
+
+        if len(lm) < self.maxlen:
+            lm = lm + [0 for _ in range(self.maxlen - len(lm))]
+            res = res + [0 for _ in range(self.maxlen - len(res))]
+        else:
+            lm = lm[:self.maxlen]
+            res = res[:self.maxlen]
+
+        return {
+            "input_ids": torch.Tensor(lm).long(),
+            "value_targets": torch.Tensor(res).float(),
         }
 
 def get_datasets_full_game(config, split):
@@ -1011,6 +1082,8 @@ def get_datasets_full_game(config, split):
 
     st = time.time()
     print(":: Starting Loading")
+    ds_train = None
+    ds_test = None
 
     if config.lm[-3:] == "npz":
         clm = np.load("data/clm.npz")
@@ -1028,9 +1101,30 @@ def get_datasets_full_game(config, split):
             res_split = data["res"]
         print(f"Pickle Loading took: {time.time()-st}s")
 
-    test_idx = int(split * len(lms_split))
-    ds_train = FullGameLoadedDataset(config, lms_split[test_idx:], res_split[test_idx:], m2id)
-    ds_test = FullGameLoadedDataset(config, lms_split[:test_idx], res_split[:test_idx], m2id)
+    elif isinstance(config.lm, list):
+        # loading fully loaded huggingface dataset
+        ds_train = PaddedHFDataset(
+            lms=config.lm,
+            results=config.rf,
+            m2id=m2id,
+            maxlen=config.maxlen,
+            split_mode="train",
+            split=split
+        )
+
+        ds_test = PaddedHFDataset(
+            lms=config.lm,
+            results=config.rf,
+            m2id=m2id,
+            maxlen=config.maxlen,
+            split_mode="test",
+            split=split
+        )
+
+    if ds_train is None:
+        test_idx = int(split * len(lms_split))
+        ds_train = FullGameLoadedDataset(config, lms_split[test_idx:], res_split[test_idx:], m2id)
+        ds_test = FullGameLoadedDataset(config, lms_split[:test_idx], res_split[:test_idx], m2id)
     return ds_train, ds_test
 
 

@@ -2,6 +2,7 @@
 @yashbonde-09.08.2020"""
 
 import os
+from glob import glob
 from argparse import ArgumentParser
 from model import *
 
@@ -19,7 +20,7 @@ Train a GPT2 model to play chess on moves only. There are two different models w
 """.split())
 
 # data args
-args.add_argument("--lmtrain", type=str, default = "data/final.p", help="path to train_lm file")
+args.add_argument("--lmtrain", type=str, default = "./data/", help="path to train_lm file")
 args.add_argument("--res", type=str, default = "data/all_res.txt", help="path to res file")
 args.add_argument("--m2id", type=str, default = "assets/moves.json", help="path to move_to_id json")
 args.add_argument("--full_game", action="store_true", default = True, help="if the dataset to use is full_game")
@@ -69,6 +70,11 @@ if args.lmtrain[-4:] == "hdf5":
 elif args.lmtrain[-3:] == "npz":
     print(":: Using numpy zips")
     assert args.maxlen % 85 == 0, "using numpy means maxlen % 85 == 0"
+
+elif args.lmtrain[-1] == "/":
+    print(":: Will load files from folder", args.lmtrain)
+    args.lmtrain = glob(args.lmtrain + "*_lm_*.txt")
+    args.res = [x.replace("lm", "res") for x in args.lmtrain]
 
 # There are three different datamodels as mentioned above
 dataConfig = DataConfig(
