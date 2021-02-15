@@ -16,9 +16,12 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import IterableDataset, DataLoader, Dataset
 
-from transformers import PretrainedConfig
+from datasets import load_dataset
+
 from transformers import GPT2Model
+from transformers import PretrainedConfig
 from transformers.models.gpt2.modeling_gpt2 import MLP, Attention, Conv1D
+
 
 # ---- helper function ----- #
 def set_seed(seed):
@@ -287,9 +290,9 @@ class ValueOnlyNetwork(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        
-        # all the layers are dedicated to learning the value function
-        self.gpt = GPT2Model(config)
+        config = ModelConfig(**vars(self.config))
+        config.n_layer = config.n_layer - 2
+        self.gpt = GPT2Model(config) # residual tower in AlphaZero
 
         # final head
         if config.loss_method == "mse":
@@ -303,7 +306,7 @@ class ValueOnlyNetwork(nn.Module):
         values = self.value_head(x.last_hidden_state)
         out = (None, values)
         if labels is not None and value_targets is not None:
-            non_pad_idx = labels.contiguous().view(-1) > 0
+            non_pad_idx = labels[:, 1:].contiguous().view(-1) > 0
             if config.loss_method == "mse":
                 # MSE works best for value function
                 values = F.tanh(values)
@@ -323,7 +326,14 @@ class ValueOnlyNetwork(nn.Module):
 
             loss = loss_value
 
-            out = (None, values, (loss, 0, loss_value))
+            out = (
+                torch.ones([0]).to(loss.device), # need to provide something None is not a valid output
+                values,
+                (
+                    loss,
+                    torch.ones([0]).to(loss.device), # need to provide something None is not a valid output
+                    loss_value
+            ))
         return out
 
 
@@ -549,169 +559,206 @@ class Trainer:
         else:
             scheduler = None
         print("Train Data Size:", len(train_data), "; Test Data Size:", len(test_data), "; Scheduler:", scheduler)
-
-        # this is second method for creating a training loop
-        pbar_train = trange(total_steps, ncols=100)
-        dl_train = DataLoader(dataset=train_data, pin_memory=True, batch_size=config.batch_size, shuffle=train_data.shuffle)
+        if config.gradient_accumulation_steps != None:
+            print("Due to presence of gradient_accumulation_steps, effective batch size:", config.gradient_accumulation_steps * config.batch_size)
+        
+        # variables outsize main training loop
         prev_train_loss = 100000 # what was the training loss in previous testing cycle
         no_loss_steps = 0 # no of steps since there was devrease in the loss
         processed_tokens = 0 # number of tokens processed till now
         break_training = False
         train_losses = [-1]
         train_acc = [-1]
-        model.train()
+        gs = 0 # this is the global step outside 
+        model.zero_grad()
 
-        for gs, d in zip(pbar_train, dl_train):
-            # total steps is now the primary iteration method
-            d = {k:v.to(self.device) for k,v in d.items()}
-            pbar_train.set_description(f"[TRAIN] GS: {gs}, Loss: {round(train_losses[-1], 5)}, Acc: {train_acc[-1]}")
+        # loop over all the epochs
+        for e in range(config.num_epochs):
 
-            # get model results
-            (policy, values, loss) = model(loss=True, **d)
-            loss_total = loss[0].mean() # gather
-            if not isinstance(loss[1], int):
-                loss_policy = loss[1].mean().item() # gather
-            else:
-                loss_policy = -1
-            loss_value = loss[2].mean().item()  # gather
-            train_losses.append(loss_total.item())
+            # this is second method for creating a training loop
+            pbar_train = trange(num_batches, ncols=100)
+            dl_train = DataLoader(
+                dataset=train_data,
+                pin_memory=True,
+                batch_size=config.batch_size,
+                shuffle=train_data.shuffle,
+                num_workers=8,
+            )
+            model.train()
 
-            # calculate move accuracy
-            move_acc = 0
-            if policy is not None:
-                policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
-                policy = torch.argmax(policy, dim=-1)
-                targets = d["input_ids"][:, 1:].contiguous().view(-1)
-                move_acc = sum(targets == policy).item()
-                move_acc /= targets.size(0)
-                train_acc.append(move_acc)
+            for _train_step_index, d in zip(pbar_train, dl_train):
+                # total steps is now the primary iteration method
+                d = {k:v.to(self.device) for k,v in d.items()}
+                pbar_train.set_description(f"[TRAIN-{e}] GS: {gs}, Loss: {round(train_losses[-1], 5)}, Acc: {train_acc[-1]}")
 
-            log_dict = {
-                "loss_total": loss_total,
-                "loss_policy": loss_policy,
-                "loss_value": loss_value,
-                "move_acc": move_acc
-            }
-
-            # calculate mse error if softmax activation used
-            if model_config.loss_method == "ce":
-                values = F.softmax(values[:, :-1, :], dim=-1).contiguous().view(-1, 3)  # [B, N, 3]
-                values = values.matmul(torch.Tensor([-1, 0, 1]).to(d["value_targets"].device).float())
-                mse = (values - d["value_targets"][:,1:].contiguous().view(-1)) ** 2
-                log_dict.update({"regression_loss": mse.mean().item()})
-
-            if scheduler is not None and scheduler != "GPT3":
-                last_lr = scheduler.get_last_lr()[0]
-                log_dict.update({"lr": last_lr})
-
-            # backprop
-            loss_total.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
-            optimizer.step()
-            if scheduler is not None and scheduler != "GPT3":
-                scheduler.step()
-
-            # ------------- LR SCHEDULING
-            elif scheduler == "GPT3":
-                # update learning rate
-                # number of processed tokens now are the actual number of tokens processed and not just len*batch_size
-                processed_tokens += (d["input_ids"] >= 0).sum()
-                if processed_tokens < config.warmup_tokens:
-                    # linear warmup
-                    lr_mult = float(processed_tokens) / float(max(1, config.warmup_tokens))
+                # get model results
+                (policy, values, loss) = model(loss=True, **d)
+                loss_total = loss[0].mean() # gather
+                if not isinstance(loss[1], int):
+                    loss_policy = loss[1].mean().item() # gather
                 else:
-                    # cosine learning rate decay
-                    progress = float(processed_tokens - config.warmup_tokens) / float(max(1, config.final_tokens - config.warmup_tokens))
-                    lr_mult = max(0.1, 0.5 * (1.0 + math.cos(math.pi * progress)))
-                lr = config.lr * lr_mult
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] = lr
-                log_dict.update({"lr": lr})
-            # ------------- LR SCHEDULING
+                    loss_policy = -1
+                loss_value = loss[2].mean().item()  # gather
+                train_losses.append(loss_total.item())
 
-            # test if time has come
-            if gs > 0 and gs % config.test_every == 0:
-                model.eval()
-                dl_test = DataLoader(
-                    dataset = test_data, pin_memory = True, batch_size = config.batch_size, shuffle=test_data.shuffle
-                )
+                # calculate move accuracy
+                move_acc = 0
+                if policy is not None and len(policy) > 1:
+                    policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
+                    policy = torch.argmax(policy, dim=-1)
+                    targets = d["input_ids"][:, 1:].contiguous().view(-1)
+                    move_acc = sum(targets == policy).item()
+                    move_acc /= targets.size(0)
+                    train_acc.append(move_acc)
 
-                num_batches = len(test_data) // config.batch_size + int(len(test_data) % config.batch_size != 0)
+                log_dict = {
+                    "loss_total": loss_total,
+                    "loss_policy": loss_policy,
+                    "loss_value": loss_value,
+                    "move_acc": move_acc
+                }
 
-                test_losses = []
-                test_acc = []
-                test_loss_value = []
-                pbar_test = trange(num_batches, ncols = 100)
-                for it, d in zip(pbar_test, dl_test):
-                    d = {k:v.to(self.device) for k,v in d.items()}
-                    pbar_test.set_description(f"[VAL] Global ({gs}) -> [{it + 1}/{num_batches}]")
-
-                    with torch.no_grad():
-                        # get model results
-                        (policy, values, loss) = model(loss=True, **d)
-                        loss_total = loss[0].mean().item()  # gather
-                        if not isinstance(loss[1], int):
-                            loss_policy = loss[1].mean().item()  # gather
-                        else:
-                            loss_policy = -1
-                        loss_value = loss[2].mean().item()  # gather
-                        test_losses.append([loss_total])
-                        test_loss_value.append([loss_value])
-
-                        # calculate move accuracy
-                        move_acc = 0
-                        if policy is not None:
-                            policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
-                            policy = torch.argmax(policy, dim=-1)
-                            targets = d["input_ids"][:, 1:].contiguous().view(-1)
-                            move_acc = sum(targets == policy).item()
-                            move_acc /= targets.size(0)
-                            test_acc.append(move_acc)
-
-                        if model_config.loss_method == "ce":
-                            values = F.softmax(values[:, :-1, :], dim=-1).contiguous().view(-1, 3)  # [B, N, 3]
-                            values = values.matmul(torch.Tensor([-1, 0, 1]).to(d["value_targets"].device).float())
-                            mse = (values - d["value_targets"][:,1:].contiguous().view(-1)) ** 2
-                            test_losses[-1].append(mse.mean().item())
-
-                # now testing is complete so see the results, save or stop if needed
-                test_losses = np.array(test_losses)
-                losses = np.mean(test_losses[:, 0])
-                test_acc = np.mean(test_acc)
-                print(f"Loss: {losses:.3f}; Acc: {test_acc:.3f}", end = " ")
-                log_dict.update({
-                    "test_loss": losses,
-                    "test_acc": test_acc
-                })
+                # calculate mse error if softmax activation used
                 if model_config.loss_method == "ce":
-                    log_dict.update({"test_regression_loss": np.mean(test_losses[:, 1])})
+                    values = F.softmax(values[:, :-1, :], dim=-1).contiguous().view(-1, 3)  # [B, N, 3]
+                    values = values.matmul(torch.Tensor([-1, 0, 1]).to(d["value_targets"].device).float())
+                    mse = (values - d["value_targets"][:,1:].contiguous().view(-1)) ** 2
+                    log_dict.update({"regression_loss": mse.mean().item()})
+
+                if scheduler is not None and scheduler != "GPT3":
+                    last_lr = scheduler.get_last_lr()[0]
+                    log_dict.update({"lr": last_lr})
+
+                # backprop now handles gradient accmulation
+                # https://gist.github.com/thomwolf/ac7a7da6b1888c2eeac8ac8b9b05d3d3
+                if config.gradient_accumulation_steps != None:
+                    loss_total = loss_total/config.gradient_accumulation_steps
+                    loss_total.backward()
+                    perform_lr_scheduling = False
+                    if (_train_step_index+1) % config.gradient_accumulation_steps == 0:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
+                        optimizer.step()
+                        model.zero_grad()
+                        perform_lr_scheduling = True
+                
                 else:
-                    log_dict.update({"test_value_loss": np.mean(test_loss_value)})
+                    # when there is no accumulation we perform old backprop
+                    loss_total.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
+                    optimizer.step()
+                    perform_lr_scheduling = True
+                
+                if perform_lr_scheduling and scheduler is not None and scheduler != "GPT3":
+                    scheduler.step()
 
-                if prev_train_loss > losses:
-                    prev_train_loss = losses
-                    no_loss_steps = 0
-                    print("... previous loss was larger, updating values")
-                    cp = config.ckpt_path.replace(".pt", f"_{gs}.pt")
-                    self.save_checkpoint(cp)
-                else:
-                    no_loss_steps += 1
-                    print(f"... previous loss was smaller. No improvements for past {no_loss_steps} evaluations")
+                # ------------- GPT3-STYLE LR SCHEDULING
+                elif perform_lr_scheduling and scheduler == "GPT3":
+                    # update learning rate
+                    # number of processed tokens now are the actual number of tokens processed and not just len*batch_size
+                    processed_tokens += (d["input_ids"] >= 0).sum()
+                    if processed_tokens < config.warmup_tokens:
+                        # linear warmup
+                        lr_mult = float(processed_tokens) / float(max(1, config.warmup_tokens))
+                    else:
+                        # cosine learning rate decay
+                        progress = float(processed_tokens - config.warmup_tokens) / float(max(1, config.final_tokens - config.warmup_tokens))
+                        lr_mult = max(0.1, 0.5 * (1.0 + math.cos(math.pi * progress)))
+                    lr = config.lr * lr_mult
+                    for param_group in optimizer.param_groups:
+                        param_group['lr'] = lr
+                    log_dict.update({"lr": lr})
+                # ------------- GPT3-STYLE LR SCHEDULING
 
-                if config.patience != -1 and  no_loss_steps == config.patience:
-                    break_training = True
+                # update the global step
+                gs += 1
 
-                model.train()
+                # test if time has come
+                if gs > 0 and gs % config.test_every == 0:
+                    model.eval()
+                    dl_test = DataLoader(
+                        dataset = test_data,
+                        pin_memory=True,
+                        batch_size=config.batch_size,
+                        shuffle=test_data.shuffle,
+                        num_workers=8,
+                    )
 
-            wandb.log(log_dict)
-            if break_training:
-                print("Stopping training")
-                break
+                    num_batches = len(test_data) // config.batch_size + int(len(test_data) % config.batch_size != 0)
 
-        model.train()
-        print("Final Step Save")
-        cp = config.ckpt_path.replace(".pt", f"_train_final.pt")
-        self.save_checkpoint(cp)
+                    test_losses = []
+                    test_acc = []
+                    test_loss_value = []
+                    pbar_test = trange(num_batches, ncols = 100)
+                    for it, d in zip(pbar_test, dl_test):
+                        d = {k:v.to(self.device) for k,v in d.items()}
+                        pbar_test.set_description(f"[VAL] Global ({gs}) -> [{it + 1}/{num_batches}]")
+
+                        with torch.no_grad():
+                            # get model results
+                            (policy, values, loss) = model(loss=True, **d)
+                            loss_total = loss[0].mean().item()  # gather
+                            if not isinstance(loss[1], int):
+                                loss_policy = loss[1].mean().item()  # gather
+                            else:
+                                loss_policy = -1
+                            loss_value = loss[2].mean().item()  # gather
+                            test_losses.append([loss_total])
+                            test_loss_value.append([loss_value])
+
+                            # calculate move accuracy
+                            move_acc = 0
+                            if policy is not None and len(policy) > 1:
+                                policy = F.softmax(policy[:,:-1,:], dim = -1).contiguous().view(-1)
+                                policy = torch.argmax(policy, dim=-1)
+                                targets = d["input_ids"][:, 1:].contiguous().view(-1)
+                                move_acc = sum(targets == policy).item()
+                                move_acc /= targets.size(0)
+                                test_acc.append(move_acc)
+
+                            if model_config.loss_method == "ce":
+                                values = F.softmax(values[:, :-1, :], dim=-1).contiguous().view(-1, 3)  # [B, N, 3]
+                                values = values.matmul(torch.Tensor([-1, 0, 1]).to(d["value_targets"].device).float())
+                                mse = (values - d["value_targets"][:,1:].contiguous().view(-1)) ** 2
+                                test_losses[-1].append(mse.mean().item())
+
+                    # now testing is complete so see the results, save or stop if needed
+                    test_losses = np.array(test_losses)
+                    losses = np.mean(test_losses[:, 0])
+                    test_acc = np.mean(test_acc)
+                    print(f"Loss: {losses:.3f}; Acc: {test_acc:.3f}", end = " ")
+                    log_dict.update({
+                        "test_loss": losses,
+                        "test_acc": test_acc
+                    })
+                    if model_config.loss_method == "ce":
+                        log_dict.update({"test_regression_loss": np.mean(test_losses[:, 1])})
+                    else:
+                        log_dict.update({"test_value_loss": np.mean(test_loss_value)})
+
+                    if prev_train_loss > losses:
+                        prev_train_loss = losses
+                        no_loss_steps = 0
+                        print("... previous loss was larger, updating values")
+                        cp = config.ckpt_path.replace(".pt", f"_{gs}.pt")
+                        self.save_checkpoint(cp)
+                    else:
+                        no_loss_steps += 1
+                        print(f"... previous loss was smaller. No improvements for past {no_loss_steps} evaluations")
+
+                    if config.patience != -1 and  no_loss_steps == config.patience:
+                        break_training = True
+
+                    model.train()
+
+                wandb.log(log_dict)
+                if break_training:
+                    print("Stopping training")
+                    break
+
+            model.train()
+            print("Epoch End Save")
+            cp = config.ckpt_path.replace(".pt", f"_{e}_train_final.pt")
+            self.save_checkpoint(cp)
 
 class TrainerConfig:
     num_epochs = 2
@@ -729,12 +776,13 @@ class TrainerConfig:
     warmup_perc = None
     warmup_tokens = None
     final_tokens = None
+    gradient_accumulation_steps=None
 
     def __init__(self, **kwargs):
         self.attrs = [
             "num_epochs", "batch_size", "lr", "betas", "grad_norm_clip", "num_workers",
             "ckpt_path", "tb_path", "patience", "test_every", "scheduler", "weight_decay",
-            "warmup_perc", "final_tokens", "warmup_tokens"
+            "warmup_perc", "final_tokens", "warmup_tokens", "gradient_accumulation_steps"
         ]
         for k,v in kwargs.items():
             setattr(self, k, v)
@@ -755,8 +803,11 @@ class TrainerConfig:
             # total tokens // (batch_size * 170)
             # this is the final tokens you get when you train full game dataset on batch size 40
             # and 170 tokens in each sequence
-            self.final_tokens = 185132*40*180*self.num_epochs  # total size of all the tokens
+            # self.final_tokens = 185132*40*180*self.num_epochs  # total size of all the tokens
             
+            # this is the number of tokens when using hf style 70mn dataset
+            self.final_tokens = int(69883426 * 200 * 0.7 * self.num_epochs)
+
             # this is the final tokens you get when you train on GPT style block
             # self.final_tokens = 613256130  # total size of all the tokens
 
@@ -1004,18 +1055,17 @@ class FullGameLoadedDataset(Dataset):
 
 class PaddedHFDataset(Dataset):
     def __init__(self, lms: list, results: list, m2id, maxlen: int, split: float, split_mode: str, **kwargs):
-        from datasets import load_dataset
-
+        self.m2id = m2id
         self.lms = load_dataset(path="text", data_files=lms)["train"]
         self.res = load_dataset(path="text", data_files=results)["train"]
 
         # instead of actually splitting the datasets we can simply add an increment of start index
         # for each of the split
-        if split_mode == "train":
+        if split_mode == "test":
             self.train_split = True
             self.incr = 0
             self.size = int(len(self.lms)*split)
-        elif split_mode == "test":
+        elif split_mode == "train":
             self.train_split = False
             self.incr = int(len(self.lms)*split)
             self.size = len(self.lms) - self.incr
@@ -1068,6 +1118,7 @@ class PaddedHFDataset(Dataset):
         return {
             "input_ids": torch.Tensor(lm).long(),
             "value_targets": torch.Tensor(res).float(),
+            "labels": torch.Tensor(lm).long()
         }
 
 def get_datasets_full_game(config, split):

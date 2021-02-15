@@ -87,6 +87,25 @@ while not done:
 
 ## Data
 
+#### Lichess Dataset
+
+This uses the super large [lichess](https://database.lichess.org/#standard_games) dataset. To download in parallel you will first have to copy the links from [here](https://database.lichess.org/standard/list.txt) (**replace newline with spaces**) and run the following code:
+```bash
+# download all the files to train on
+cat links/file.txt | xargs -n 1 -P <number of parallel procs> wget
+
+# unzip all the files
+echo *.bz2 | xargs -n 1 -P 32 lbzip2 -d
+
+# parse all the files
+mkdir data
+echo *.pgn | xargs -n 1 -P 32 python3 parser.py
+```
+
+This will create a folder `data` and write all the files as `txt` in that folder. At runtime we are now using [huggingface datasets](https://github.com/huggingface/datasets) and it will automatically handle the loading and parsing of those files.
+
+
+#### FICS Dataset
 There are two sources for all the games [links.txt](./assets/links.txt) which has pgnmentor files and **ALL** games from FICS and second [links2000.txt](./assets/links2000.txt) which has all the games where average ELO > 2000 from FICS datasets. I am using the second file now and use 5% testing split. To prepare your own data run the script `download.py` as follows (**You will always have to create new links**):
 ```bash
 # Following timings are given for my system with `Xeon® E5-2620 v3` (24 cores)
@@ -188,6 +207,9 @@ How do we find out whether the model is learning or not. Often during the gamepl
 I need to come up with good metrics!
 
 ## Updates
+
+- **15/02/2021** Some more updates:
+  - Now loads large text files using [datasets](https://github.com/huggingface/datasets)
 
 - **29/12/2020** Some more updates:
   - Self play pipeline for pickling-zipping-uploading complete. Read instruction for run above.
