@@ -94,8 +94,8 @@ This uses the super large [lichess](https://database.lichess.org/#standard_games
 # download all the files to train on
 cat links/file.txt | xargs -n 1 -P <number of parallel procs> wget
 
-# unzip all the files
-echo *.bz2 | xargs -n 1 -P 32 lbzip2 -d
+# unzip all the files no xargs becuase lbzip2 already uses all the cores
+for i in echo *.bz2: do  echo $i; lbzip2 -d $i; done
 
 # parse all the files
 mkdir data
@@ -103,6 +103,13 @@ echo *.pgn | xargs -n 1 -P 32 python3 parser.py
 ```
 
 This will create a folder `data` and write all the files as `txt` in that folder. At runtime we are now using [huggingface datasets](https://github.com/huggingface/datasets) and it will automatically handle the loading and parsing of those files.
+
+Available on S3 bucket called `70mnChess.tar.bz2`. Scaling this to a larger dataset.
+
+
+#### Leela Chess Zero
+
+One major problem with networks that are trained on the human dataset for training chess engines is that the value calculation is often incorrect, which is why self play actually works better. I still haven't used this and is in the pipeline, get data [here](https://storage.lczero.org/files/).
 
 
 #### FICS Dataset

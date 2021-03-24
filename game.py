@@ -209,7 +209,9 @@ class Node():
         p = self.p
         if noise:
             p = self.p * 0.75 + noise * 0.25
-        return self.action_value + 5 * p * np.sqrt(self.nsb) / (1+self.n)
+        value = self.action_value + 5 * p * np.sqrt(self.nsb) / (1+self.n)
+        self.n = self.n + 1 # fix bug where we were not updating the node visit
+        return value
 
     @property
     def terminal(self):
