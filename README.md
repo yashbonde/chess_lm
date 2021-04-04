@@ -250,6 +250,11 @@ I need to come up with good metrics!
   - `total_steps` is now the default iteration method and not `max_epochs`, determined using `total_step = num_batch * max_epochs` and add early stopping. This brings is closer to the literature where training is done over a fixed set of steps and valuation also happens on steps and not epochs.
 
 
+## Papers
+
+Some papers like this:
+- (MCTSNet)[https://arxiv.org/pdf/1802.04697.pdf]
+
 ## Credits
 
 The code I have written is under MIT License, code used under its own licenses. I scraped the links from [pgnmentor.com](https://www.pgnmentor.com/files.html) and [ficsgames.org](https://www.ficsgames.org/download.html) and the games are by the players. I am not aware of the legality here, so if you have an problem, just raise an issue. For now I have uploaded the parsed ZIP file on my GDrive.
